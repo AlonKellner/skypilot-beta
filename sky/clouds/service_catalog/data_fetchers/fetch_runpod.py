@@ -82,7 +82,7 @@ def get_partial_runpod_catalog(is_secure: bool) -> pd.DataFrame:
             "lowestPrice.uninterruptablePrice": "Price",
             "lowestPrice.minimumBidPrice": "SpotPrice",
             "lowestPrice.minVcpu": "vCPUs",
-            "memoryInGb": "MemoryGiB",
+            "lowestPrice.minMemory": "MemoryGiB",
         }
     )
 
@@ -92,7 +92,6 @@ def get_partial_runpod_catalog(is_secure: bool) -> pd.DataFrame:
     if len(missing_ids) > 0:
         print(f"WARNING! Some machine ids were missing from the mapping: {missing_ids}")
     runpod["AcceleratorName"] = runpod["id"].replace(REVERSE_GPU_MAP)
-    runpod["GpuInfo"] = runpod["AcceleratorName"]
 
     # Duplicate each row for all possible accelerator counts (up to max)
     runpod["AcceleratorCount"] = runpod["maxGpuCount"].apply(
@@ -104,6 +103,20 @@ def get_partial_runpod_catalog(is_secure: bool) -> pd.DataFrame:
         + "x_"
         + runpod_exploded["id"].apply(lambda x: x.replace(" ", "-"))
     )
+    
+    def format_gpu_info(row):
+        return {
+            "Gpus": [
+                {
+                    "Name": row["AcceleratorName"],
+                    "Count": str(float(row["AcceleratorCount"])),
+                    "MemoryInfo": {"SizeInMiB": row["memoryInGb"] * 1024},
+                    "TotalGpuMemoryInMiB": row["AcceleratorCount"] * row["memoryInGb"] * 1024,
+                }
+            ]
+        }
+    
+    runpod_exploded["GpuInfo"] = runpod_exploded.apply(format_gpu_info, axis="columns")
 
     # Multiply linearly scaled values by the accelerator count
     for c in ["Price", "SpotPrice", "vCPUs", "MemoryGiB"]:
