@@ -105,7 +105,7 @@ def get_partial_runpod_catalog(is_secure: bool) -> pd.DataFrame:
     )
     
     def format_gpu_info(row):
-        return {
+        return repr({
             "Gpus": [
                 {
                     "Name": row["AcceleratorName"],
@@ -114,7 +114,7 @@ def get_partial_runpod_catalog(is_secure: bool) -> pd.DataFrame:
                     "TotalGpuMemoryInMiB": row["AcceleratorCount"] * row["memoryInGb"] * 1024,
                 }
             ]
-        }
+        })
     
     runpod_exploded["GpuInfo"] = runpod_exploded.apply(format_gpu_info, axis="columns")
 
