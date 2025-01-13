@@ -88,9 +88,14 @@ def get_partial_runpod_catalog(is_secure: bool) -> pd.DataFrame:
 
     # Convert runpod ids to skypilot accelerator names
     REVERSE_GPU_MAP = {v: k for k, v in GPU_NAME_MAP.items()}
-    missing_ids = [id for id in runpod["id"].unique() if id not in REVERSE_GPU_MAP]
+    runpod_ids = set(runpod["id"].unique())
+    mapping_ids = set(REVERSE_GPU_MAP.keys())
+    missing_ids = runpod_ids - mapping_ids
+    extra_ids = mapping_ids - runpod_ids
     if len(missing_ids) > 0:
-        print(f"WARNING! Some machine ids were missing from the mapping: {missing_ids}")
+        print(f"WARNING! Some machine ids from runpod api were missing from runpod mapping: {missing_ids}")
+    if len(extra_ids) > 0:
+        print(f"WARNING! Some machine ids in runpod mapping do not exist in runpod api: {extra_ids}")
     runpod["AcceleratorName"] = runpod["id"].replace(REVERSE_GPU_MAP)
 
     # Duplicate each row for all possible accelerator counts (up to max)
