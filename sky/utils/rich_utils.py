@@ -121,7 +121,7 @@ class _NoOpConsoleStatus:
         pass
 
 
-# TODO(zhwu): we need a wrapper for the rich.progress in our code as well.
+# TODO(SKY-1216): we need a wrapper for the rich.progress in our code as well.
 class _RevertibleStatus:
     """A wrapper for status that can revert to previous message after exit."""
 
@@ -252,7 +252,7 @@ def decode_rich_status(
             else:
                 if decoding_status is None:
                     # status may not be initialized if a user use --tail for
-                    # sky api get.
+                    # sky api logs.
                     continue
                 assert decoding_status is not None, (
                     f'Rich status not initialized: {encoded_msg}')

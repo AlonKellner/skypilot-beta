@@ -53,7 +53,7 @@ def launch(
     fast: bool = False,
 ) -> Tuple[Optional[int], Optional[backends.ResourceHandle]]:
     # NOTE(dev): Keep the docstring consistent between the Python API and CLI.
-    """Launch a managed job.
+    """Launches a managed job.
 
     Please refer to sky.cli.job_launch for documentation.
 
@@ -291,7 +291,7 @@ def _maybe_restart_controller(
 @usage_lib.entrypoint
 def queue(refresh: bool, skip_finished: bool = False) -> List[Dict[str, Any]]:
     # NOTE(dev): Keep the docstring consistent between the Python API and CLI.
-    """Get statuses of managed jobs.
+    """Gets statuses of managed jobs.
 
     Please refer to sky.cli.job_queue for documentation.
 
@@ -358,7 +358,7 @@ def cancel(name: Optional[str] = None,
            job_ids: Optional[List[int]] = None,
            all: bool = False) -> None:
     # NOTE(dev): Keep the docstring consistent between the Python API and CLI.
-    """Cancel managed jobs.
+    """Cancels managed jobs.
 
     Please refer to sky.cli.job_cancel for documentation.
 
@@ -454,7 +454,7 @@ def tail_logs(name: Optional[str], job_id: Optional[int], follow: bool,
 
 def start_dashboard_forwarding(refresh: bool = False) -> Tuple[int, int]:
     """Opens a dashboard for managed jobs (needs controller to be UP)."""
-    # TODO(zongheng): ideally, the controller/dashboard server should expose the
+    # TODO(SKY-1212): ideally, the controller/dashboard server should expose the
     # API perhaps via REST. Then here we would (1) not have to use SSH to try to
     # see if the controller is UP first, which is slow; (2) not have to run SSH
     # port forwarding first (we'd just launch a local dashboard which would make

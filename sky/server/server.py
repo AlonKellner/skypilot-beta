@@ -1,4 +1,4 @@
-"""SkyPilot Server exposing REST APIs."""
+"""SkyPilot API Server exposing RESTful APIs."""
 
 import argparse
 import asyncio
@@ -8,33 +8,33 @@ import os
 import pathlib
 import shutil
 import sys
-import tempfile
 import time
-from typing import AsyncGenerator, Deque, List, Optional
+from typing import AsyncGenerator, Deque, Dict, List, Literal, Optional
 import uuid
 import zipfile
 
 import aiofiles
-import colorama
 import fastapi
 from fastapi.middleware import cors
 import starlette.middleware.base
 
+import sky
 from sky import check as sky_check
 from sky import clouds
 from sky import core
 from sky import execution
 from sky import optimizer
 from sky import sky_logging
-from sky.api import common
-from sky.api.requests import executor
-from sky.api.requests import payloads
-from sky.api.requests import requests as requests_lib
 from sky.clouds import service_catalog
 from sky.data import storage_utils
-from sky.jobs.api import rest as jobs_rest
+from sky.jobs.server import server as jobs_rest
 from sky.provision.kubernetes import utils as kubernetes_utils
-from sky.serve.api import rest as serve_rest
+from sky.serve.server import server as serve_rest
+from sky.server import common
+from sky.server import constants as server_constants
+from sky.server.requests import executor
+from sky.server.requests import payloads
+from sky.server.requests import requests as requests_lib
 from sky.skylet import constants
 from sky.utils import common as common_lib
 from sky.utils import common_utils
@@ -101,8 +101,9 @@ app.include_router(serve_rest.router, prefix='/serve', tags=['serve'])
 
 
 @app.post('/check')
-async def check(request: fastapi.Request, check_body: payloads.CheckBody):
-    """Check enabled clouds."""
+async def check(request: fastapi.Request,
+                check_body: payloads.CheckBody) -> None:
+    """Checks enabled clouds."""
     executor.schedule_request(
         request_id=request.state.request_id,
         request_name='check',
@@ -112,19 +113,9 @@ async def check(request: fastapi.Request, check_body: payloads.CheckBody):
     )
 
 
-@app.get('/server_info')
-async def server_info(request: fastapi.Request) -> None:
-    executor.schedule_request(
-        request_id=request.state.request_id,
-        request_name='server_info',
-        request_body=payloads.RequestBody(),
-        func=core.server_info,
-        schedule_type=requests_lib.ScheduleType.NON_BLOCKING,
-    )
-
-
 @app.get('/enabled_clouds')
 async def enabled_clouds(request: fastapi.Request) -> None:
+    """Gets enabled clouds on the server."""
     executor.schedule_request(
         request_id=request.state.request_id,
         request_name='enabled_clouds',
@@ -139,6 +130,7 @@ async def realtime_kubernetes_gpu_availability(
     request: fastapi.Request,
     realtime_gpu_availability_body: payloads.RealtimeGpuAvailabilityRequestBody
 ) -> None:
+    """Gets real-time Kubernetes GPU availability."""
     executor.schedule_request(
         request_id=request.state.request_id,
         request_name='realtime_kubernetes_gpu_availability',
@@ -153,6 +145,7 @@ async def kubernetes_node_info(
         request: fastapi.Request,
         kubernetes_node_info_body: payloads.KubernetesNodeInfoRequestBody
 ) -> None:
+    """Gets Kubernetes node information."""
     executor.schedule_request(
         request_id=request.state.request_id,
         request_name='kubernetes_node_info',
@@ -163,7 +156,8 @@ async def kubernetes_node_info(
 
 
 @app.get('/status_kubernetes')
-async def status_kubernetes(request: fastapi.Request):
+async def status_kubernetes(request: fastapi.Request) -> None:
+    """Gets Kubernetes status."""
     executor.schedule_request(
         request_id=request.state.request_id,
         request_name='status_kubernetes',
@@ -177,6 +171,7 @@ async def status_kubernetes(request: fastapi.Request):
 async def list_accelerators(
         request: fastapi.Request,
         list_accelerator_counts_body: payloads.ListAcceleratorsBody) -> None:
+    """Gets list of accelerators from cloud catalog."""
     executor.schedule_request(
         request_id=request.state.request_id,
         request_name='list_accelerators',
@@ -191,6 +186,7 @@ async def list_accelerator_counts(
         request: fastapi.Request,
         list_accelerator_counts_body: payloads.ListAcceleratorCountsBody
 ) -> None:
+    """Gets list of accelerator counts from cloud catalog."""
     executor.schedule_request(
         request_id=request.state.request_id,
         request_name='list_accelerator_counts',
@@ -201,18 +197,16 @@ async def list_accelerator_counts(
 
 
 @app.post('/validate')
-async def validate(validate_body: payloads.ValidateBody):
+async def validate(validate_body: payloads.ValidateBody) -> None:
+    """Validates the user's DAG."""
     # TODO(SKY-1035): validate if existing cluster satisfies the requested
     # resources, e.g. sky exec --gpus V100:8 existing-cluster-with-no-gpus
-    # logger.info(f'Validating tasks: {validate_body.dag}')
-    with tempfile.NamedTemporaryFile(mode='w') as f:
-        f.write(validate_body.dag)
-        f.flush()
-        dag = dag_utils.load_chain_dag_from_yaml(f.name)
+    logger.debug(f'Validating tasks: {validate_body.dag}')
+    dag = dag_utils.load_chain_dag_from_yaml_str(validate_body.dag)
     for task in dag.tasks:
         # Will validate workdir and file_mounts in the backend, as those need
-        # to be validated after the files are uploaded to the SkyPilot server
-        # with `upload_mounts_to_api_server`.
+        # to be validated after the files are uploaded to the SkyPilot API
+        # server with `upload_mounts_to_api_server`.
         task.validate_name()
         task.validate_run()
         for r in task.resources:
@@ -221,7 +215,8 @@ async def validate(validate_body: payloads.ValidateBody):
 
 @app.post('/optimize')
 async def optimize(optimize_body: payloads.OptimizeBody,
-                   request: fastapi.Request):
+                   request: fastapi.Request) -> None:
+    """Optimizes the user's DAG."""
     executor.schedule_request(
         request_id=request.state.request_id,
         request_name='optimize',
@@ -233,50 +228,249 @@ async def optimize(optimize_body: payloads.OptimizeBody,
 
 
 @app.post('/upload')
-async def upload_zip_file(request: fastapi.Request, user_hash: str):
+async def upload_zip_file(request: fastapi.Request, user_hash: str) -> None:
+    """Uploads a zip file to the API server."""
+    # TODO(1271): We need to double check security of uploading zip file.
     client_file_mounts_dir = (common.CLIENT_DIR.expanduser().resolve() /
                               user_hash / 'file_mounts')
     os.makedirs(client_file_mounts_dir, exist_ok=True)
     timestamp = str(int(time.time()))
-    try:
-        # Save the uploaded zip file temporarily
-        zip_file_path = client_file_mounts_dir / f'{timestamp}.zip'
-        async with aiofiles.open(zip_file_path, 'wb') as f:
-            async for chunk in request.stream():
-                await f.write(chunk)
+    # Save the uploaded zip file temporarily
+    zip_file_path = client_file_mounts_dir / f'{timestamp}.zip'
+    async with aiofiles.open(zip_file_path, 'wb') as f:
+        async for chunk in request.stream():
+            await f.write(chunk)
 
-        with zipfile.ZipFile(zip_file_path, 'r') as zipf:
-            for member in zipf.namelist():
-                # Determine the new path
-                filename = os.path.basename(member)
-                original_path = os.path.normpath(member)
-                new_path = client_file_mounts_dir / original_path.lstrip('/')
+    with zipfile.ZipFile(zip_file_path, 'r') as zipf:
+        for member in zipf.namelist():
+            # Determine the new path
+            filename = os.path.basename(member)
+            original_path = os.path.normpath(member)
+            new_path = client_file_mounts_dir / original_path.lstrip('/')
 
-                if not filename:  # This is for directories, skip
-                    new_path.mkdir(parents=True, exist_ok=True)
-                    continue
-                new_path.parent.mkdir(parents=True, exist_ok=True)
-                with zipf.open(member) as member_file, new_path.open('wb') as f:
-                    # Use shutil.copyfileobj to copy files in chunks, so it does
-                    # not load the entire file into memory.
-                    shutil.copyfileobj(member_file, f)
+            if not filename:  # This is for directories, skip
+                new_path.mkdir(parents=True, exist_ok=True)
+                continue
+            new_path.parent.mkdir(parents=True, exist_ok=True)
+            with zipf.open(member) as member_file, new_path.open('wb') as f:
+                # Use shutil.copyfileobj to copy files in chunks, so it does
+                # not load the entire file into memory.
+                shutil.copyfileobj(member_file, f)
 
-        # Cleanup the temporary file
-        zip_file_path.unlink()
+    # Cleanup the temporary file
+    zip_file_path.unlink()
 
-        return {'status': 'files uploaded and extracted'}
-    except Exception as e:  # pylint: disable=broad-except
-        return {'detail': str(e)}
+
+@app.post('/launch')
+async def launch(launch_body: payloads.LaunchBody,
+                 request: fastapi.Request) -> None:
+    """Launches a cluster or task."""
+    request_id = request.state.request_id
+    executor.schedule_request(
+        request_id,
+        request_name='launch',
+        request_body=launch_body,
+        func=execution.launch,
+        schedule_type=requests_lib.ScheduleType.BLOCKING,
+    )
+
+
+@app.post('/exec')
+# pylint: disable=redefined-builtin
+async def exec(request: fastapi.Request, exec_body: payloads.ExecBody) -> None:
+    """Executes a task on an existing cluster."""
+    executor.schedule_request(
+        request_id=request.state.request_id,
+        request_name='exec',
+        request_body=exec_body,
+        func=execution.exec,
+        schedule_type=requests_lib.ScheduleType.BLOCKING,
+    )
+
+
+@app.post('/stop')
+async def stop(request: fastapi.Request,
+               stop_body: payloads.StopOrDownBody) -> None:
+    """Stops a cluster."""
+    executor.schedule_request(
+        request_id=request.state.request_id,
+        request_name='stop',
+        request_body=stop_body,
+        func=core.stop,
+        schedule_type=requests_lib.ScheduleType.NON_BLOCKING,
+    )
+
+
+@app.post('/status')
+async def status(
+    request: fastapi.Request,
+    status_body: payloads.StatusBody = payloads.StatusBody()
+) -> None:
+    """Gets cluster statuses."""
+    executor.schedule_request(
+        request_id=request.state.request_id,
+        request_name='status',
+        request_body=status_body,
+        func=core.status,
+        schedule_type=(requests_lib.ScheduleType.BLOCKING if
+                       status_body.refresh != common_lib.StatusRefreshMode.NONE
+                       else requests_lib.ScheduleType.NON_BLOCKING),
+    )
+
+
+@app.post('/endpoints')
+async def endpoints(request: fastapi.Request,
+                    endpoint_body: payloads.EndpointsBody) -> None:
+    """Gets the endpoint for a given cluster and port number (endpoint)."""
+    executor.schedule_request(
+        request_id=request.state.request_id,
+        request_name='endpoints',
+        request_body=endpoint_body,
+        func=core.endpoints,
+        schedule_type=requests_lib.ScheduleType.NON_BLOCKING,
+    )
+
+
+@app.post('/down')
+async def down(request: fastapi.Request,
+               down_body: payloads.StopOrDownBody) -> None:
+    """Tears down a cluster."""
+    executor.schedule_request(
+        request_id=request.state.request_id,
+        request_name='down',
+        request_body=down_body,
+        func=core.down,
+        schedule_type=requests_lib.ScheduleType.NON_BLOCKING,
+    )
+
+
+@app.post('/start')
+async def start(request: fastapi.Request,
+                start_body: payloads.StartBody) -> None:
+    """Restarts a cluster."""
+    executor.schedule_request(
+        request_id=request.state.request_id,
+        request_name='start',
+        request_body=start_body,
+        func=core.start,
+        schedule_type=requests_lib.ScheduleType.BLOCKING,
+    )
+
+
+@app.post('/autostop')
+async def autostop(request: fastapi.Request,
+                   autostop_body: payloads.AutostopBody) -> None:
+    """Schedules an autostop/autodown for a cluster."""
+    executor.schedule_request(
+        request_id=request.state.request_id,
+        request_name='autostop',
+        request_body=autostop_body,
+        func=core.autostop,
+        schedule_type=requests_lib.ScheduleType.NON_BLOCKING,
+    )
+
+
+@app.post('/queue')
+async def queue(request: fastapi.Request,
+                queue_body: payloads.QueueBody) -> None:
+    """Gets the job queue of a cluster."""
+    executor.schedule_request(
+        request_id=request.state.request_id,
+        request_name='queue',
+        request_body=queue_body,
+        func=core.queue,
+        schedule_type=requests_lib.ScheduleType.NON_BLOCKING,
+    )
+
+
+@app.post('/job_status')
+async def job_status(request: fastapi.Request,
+                     job_status_body: payloads.JobStatusBody) -> None:
+    """Gets the status of a job."""
+    executor.schedule_request(
+        request_id=request.state.request_id,
+        request_name='job_status',
+        request_body=job_status_body,
+        func=core.job_status,
+        schedule_type=requests_lib.ScheduleType.NON_BLOCKING,
+    )
+
+
+@app.post('/cancel')
+async def cancel(request: fastapi.Request,
+                 cancel_body: payloads.CancelBody) -> None:
+    """Cancels jobs on a cluster."""
+    executor.schedule_request(
+        request_id=request.state.request_id,
+        request_name='cancel',
+        request_body=cancel_body,
+        func=core.cancel,
+        schedule_type=requests_lib.ScheduleType.NON_BLOCKING,
+    )
+
+
+@app.post('/logs')
+async def logs(
+    request: fastapi.Request, cluster_job_body: payloads.ClusterJobBody,
+    background_tasks: fastapi.BackgroundTasks
+) -> fastapi.responses.StreamingResponse:
+    """Tails the logs of a job."""
+
+    async def on_disconnect():
+        logger.info(f'User terminated the connection for request '
+                    f'{request.state.request_id}')
+        requests_lib.kill_requests([request.state.request_id])
+
+    executor.schedule_request(
+        request_id=request.state.request_id,
+        request_name='logs',
+        request_body=cluster_job_body,
+        func=core.tail_logs,
+        schedule_type=requests_lib.ScheduleType.NON_BLOCKING,
+    )
+    request_task = requests_lib.get_request(request.state.request_id)
+
+    # The background task will be run after returning a response.
+    # https://fastapi.tiangolo.com/tutorial/background-tasks/
+    background_tasks.add_task(on_disconnect)
+    return fastapi.responses.StreamingResponse(
+        log_streamer(request_task.request_id, request_task.log_path),
+        media_type='text/plain',
+        headers={
+            'Cache-Control': 'no-cache',
+            'X-Accel-Buffering': 'no'  # Disable nginx buffering if present
+        })
+
+
+@app.post('/download_logs')
+async def download_logs(request: fastapi.Request,
+                        cluster_jobs_body: payloads.ClusterJobsBody) -> None:
+    """Downloads the logs of a job."""
+    user_hash = cluster_jobs_body.env_vars[constants.USER_ID_ENV_VAR]
+    logs_dir_on_api_server = common.api_server_user_logs_dir_prefix(user_hash)
+    logs_dir_on_api_server.expanduser().mkdir(parents=True, exist_ok=True)
+    cluster_job_download_logs_body = payloads.ClusterJobsDownloadLogsBody(
+        cluster_name=cluster_jobs_body.cluster_name,
+        job_ids=cluster_jobs_body.job_ids,
+        local_dir=str(logs_dir_on_api_server),
+    )
+    executor.schedule_request(
+        request_id=request.state.request_id,
+        request_name='download_logs',
+        request_body=cluster_job_download_logs_body,
+        func=core.download_logs,
+        schedule_type=requests_lib.ScheduleType.NON_BLOCKING,
+    )
 
 
 @app.post('/download')
-async def download(download_body: payloads.DownloadBody):
-    """Download a folder from the cluster to the local machine."""
+async def download(download_body: payloads.DownloadBody) -> None:
+    """Downloads a folder from the cluster to the local machine."""
     folder_paths = [
         pathlib.Path(folder_path) for folder_path in download_body.folder_paths
     ]
     user_hash = download_body.env_vars[constants.USER_ID_ENV_VAR]
-    logs_dir_on_api_server = common.api_server_logs_dir_prefix(user_hash)
+    logs_dir_on_api_server = common.api_server_user_logs_dir_prefix(user_hash)
     for folder_path in folder_paths:
         if not str(folder_path).startswith(str(logs_dir_on_api_server)):
             raise fastapi.HTTPException(
@@ -319,194 +513,9 @@ async def download(download_body: payloads.DownloadBody):
                                     detail=f'Error creating zip file: {str(e)}')
 
 
-@app.post('/launch')
-async def launch(launch_body: payloads.LaunchBody, request: fastapi.Request):
-    """Launch a task."""
-    request_id = request.state.request_id
-    executor.schedule_request(
-        request_id,
-        request_name='launch',
-        request_body=launch_body,
-        func=execution.launch,
-        schedule_type=requests_lib.ScheduleType.BLOCKING,
-    )
-
-
-@app.post('/exec')
-# pylint: disable=redefined-builtin
-async def exec(request: fastapi.Request, exec_body: payloads.ExecBody):
-
-    executor.schedule_request(
-        request_id=request.state.request_id,
-        request_name='exec',
-        request_body=exec_body,
-        func=execution.exec,
-        schedule_type=requests_lib.ScheduleType.BLOCKING,
-    )
-
-
-@app.post('/stop')
-async def stop(request: fastapi.Request, stop_body: payloads.StopOrDownBody):
-    executor.schedule_request(
-        request_id=request.state.request_id,
-        request_name='stop',
-        request_body=stop_body,
-        func=core.stop,
-        schedule_type=requests_lib.ScheduleType.BLOCKING,
-    )
-
-
-@app.post('/status')
-async def status(
-    request: fastapi.Request,
-    status_body: payloads.StatusBody = payloads.StatusBody()
-) -> None:
-    executor.schedule_request(
-        request_id=request.state.request_id,
-        request_name='status',
-        request_body=status_body,
-        func=core.status,
-        schedule_type=(requests_lib.ScheduleType.BLOCKING if
-                       status_body.refresh != common_lib.StatusRefreshMode.NONE
-                       else requests_lib.ScheduleType.NON_BLOCKING),
-    )
-
-
-@app.post('/endpoints')
-async def endpoints(request: fastapi.Request,
-                    endpoint_body: payloads.EndpointBody) -> None:
-    executor.schedule_request(
-        request_id=request.state.request_id,
-        request_name='endpoints',
-        request_body=endpoint_body,
-        func=core.endpoints,
-        schedule_type=requests_lib.ScheduleType.NON_BLOCKING,
-    )
-
-
-@app.post('/down')
-async def down(request: fastapi.Request, down_body: payloads.StopOrDownBody):
-    executor.schedule_request(
-        request_id=request.state.request_id,
-        request_name='down',
-        request_body=down_body,
-        func=core.down,
-        schedule_type=requests_lib.ScheduleType.NON_BLOCKING,
-    )
-
-
-@app.post('/start')
-async def start(request: fastapi.Request, start_body: payloads.StartBody):
-    """Restart a cluster."""
-    executor.schedule_request(
-        request_id=request.state.request_id,
-        request_name='start',
-        request_body=start_body,
-        func=core.start,
-        schedule_type=requests_lib.ScheduleType.BLOCKING,
-    )
-
-
-@app.post('/autostop')
-async def autostop(request: fastapi.Request,
-                   autostop_body: payloads.AutostopBody):
-    """Set the autostop time for a cluster."""
-    executor.schedule_request(
-        request_id=request.state.request_id,
-        request_name='autostop',
-        request_body=autostop_body,
-        func=core.autostop,
-        schedule_type=requests_lib.ScheduleType.NON_BLOCKING,
-    )
-
-
-@app.post('/queue')
-async def queue(request: fastapi.Request, queue_body: payloads.QueueBody):
-    """Get the queue of tasks for a cluster."""
-    executor.schedule_request(
-        request_id=request.state.request_id,
-        request_name='queue',
-        request_body=queue_body,
-        func=core.queue,
-        schedule_type=requests_lib.ScheduleType.NON_BLOCKING,
-    )
-
-
-@app.post('/job_status')
-async def job_status(request: fastapi.Request,
-                     job_status_body: payloads.JobStatusBody):
-    """Get the status of a job."""
-    executor.schedule_request(
-        request_id=request.state.request_id,
-        request_name='job_status',
-        request_body=job_status_body,
-        func=core.job_status,
-        schedule_type=requests_lib.ScheduleType.NON_BLOCKING,
-    )
-
-
-@app.post('/cancel')
-async def cancel(request: fastapi.Request,
-                 cancel_body: payloads.CancelBody) -> None:
-    executor.schedule_request(
-        request_id=request.state.request_id,
-        request_name='cancel',
-        request_body=cancel_body,
-        func=core.cancel,
-        schedule_type=requests_lib.ScheduleType.NON_BLOCKING,
-    )
-
-
-@app.post('/logs')
-async def logs(request: fastapi.Request,
-               cluster_job_body: payloads.ClusterJobBody) -> None:
-    # TODO(SKY-988): make this synchronous.
-    executor.schedule_request(
-        request_id=request.state.request_id,
-        request_name='logs',
-        request_body=cluster_job_body,
-        func=core.tail_logs,
-        schedule_type=requests_lib.ScheduleType.NON_BLOCKING,
-    )
-
-
-@app.post('/download_logs')
-async def download_logs(request: fastapi.Request,
-                        cluster_jobs_body: payloads.ClusterJobsBody) -> None:
-
-    user_hash = cluster_jobs_body.env_vars[constants.USER_ID_ENV_VAR]
-    logs_dir_on_api_server = common.api_server_logs_dir_prefix(user_hash)
-    logs_dir_on_api_server.expanduser().mkdir(parents=True, exist_ok=True)
-    cluster_job_download_logs_body = payloads.ClusterJobsDownloadLogsBody(
-        cluster_name=cluster_jobs_body.cluster_name,
-        job_ids=cluster_jobs_body.job_ids,
-        local_dir=str(logs_dir_on_api_server),
-    )
-    executor.schedule_request(
-        request_id=request.state.request_id,
-        request_name='download_logs',
-        request_body=cluster_job_download_logs_body,
-        func=core.download_logs,
-        schedule_type=requests_lib.ScheduleType.NON_BLOCKING,
-    )
-
-
-# TODO(zhwu): expose download_logs
-# @app.get('/download_logs')
-# async def download_logs(request: fastapi.Request,
-#                         cluster_jobs_body: payloads.ClusterJobsBody,
-# ) -> Dict[str, str]:
-#     """Download logs to API server and returns the job id to log dir
-#     mapping."""
-#     # Call the function directly to download the logs to the API server first.
-#     log_dirs = core.download_logs(cluster_name=cluster_jobs_body.cluster_name,
-#                        job_ids=cluster_jobs_body.job_ids)
-
-#     return log_dirs
-
-
 @app.get('/cost_report')
 async def cost_report(request: fastapi.Request) -> None:
+    """Gets the cost report of a cluster."""
     executor.schedule_request(
         request_id=request.state.request_id,
         request_name='cost_report',
@@ -517,7 +526,8 @@ async def cost_report(request: fastapi.Request) -> None:
 
 
 @app.get('/storage/ls')
-async def storage_ls(request: fastapi.Request):
+async def storage_ls(request: fastapi.Request) -> None:
+    """Gets the storages."""
     executor.schedule_request(
         request_id=request.state.request_id,
         request_name='storage_ls',
@@ -529,7 +539,8 @@ async def storage_ls(request: fastapi.Request):
 
 @app.post('/storage/delete')
 async def storage_delete(request: fastapi.Request,
-                         storage_body: payloads.StorageBody):
+                         storage_body: payloads.StorageBody) -> None:
+    """Deletes a storage."""
     executor.schedule_request(
         request_id=request.state.request_id,
         request_name='storage_delete',
@@ -541,7 +552,8 @@ async def storage_delete(request: fastapi.Request,
 
 @app.post('/local_up')
 async def local_up(request: fastapi.Request,
-                   local_up_body: payloads.LocalUpBody):
+                   local_up_body: payloads.LocalUpBody) -> None:
+    """Launches a Kubernetes cluster on API server."""
     executor.schedule_request(
         request_id=request.state.request_id,
         request_name='local_up',
@@ -552,7 +564,8 @@ async def local_up(request: fastapi.Request,
 
 
 @app.post('/local_down')
-async def local_down(request: fastapi.Request):
+async def local_down(request: fastapi.Request) -> None:
+    """Tears down the Kubernetes cluster started by local_up."""
     executor.schedule_request(
         request_id=request.state.request_id,
         request_name='local_down',
@@ -562,26 +575,12 @@ async def local_down(request: fastapi.Request):
     )
 
 
-# TODO(zhwu): remove this after debugging
-def long_running_request_inner():
-    while True:
-        print('long_running_request is running ...')
-        time.sleep(5)
+# === API server related APIs ===
 
 
-@app.get('/long_running_request')
-async def long_running_request(request: fastapi.Request):
-    executor.schedule_request(
-        request_id=request.state.request_id,
-        request_name='long_running_request',
-        request_body=payloads.RequestBody(),
-        func=long_running_request_inner,
-        schedule_type=requests_lib.ScheduleType.BLOCKING,
-    )
-
-
-@app.get('/get')
-async def get(request_id: str) -> requests_lib.RequestPayload:
+@app.get('/api/get')
+async def api_get(request_id: str) -> requests_lib.RequestPayload:
+    """Gets a request with a given request ID prefix."""
     while True:
         request_task = requests_lib.get_request(request_id)
         if request_task is None:
@@ -612,7 +611,9 @@ async def _yield_log_file_with_payloads_skipped(
 async def log_streamer(request_id: Optional[str],
                        log_path: pathlib.Path,
                        plain_logs: bool = False,
-                       tail: Optional[int] = None) -> AsyncGenerator[str, None]:
+                       tail: Optional[int] = None,
+                       follow: bool = True) -> AsyncGenerator[str, None]:
+    """Streams the logs of a request."""
     if request_id is not None:
         status_msg = rich_utils.EncodedStatusMessage(
             f'[dim]Checking request: {request_id}[/dim]')
@@ -621,6 +622,7 @@ async def log_streamer(request_id: Optional[str],
         if request_task is None:
             raise fastapi.HTTPException(
                 status_code=404, detail=f'Request {request_id} not found')
+        request_id = request_task.request_id
 
         # Do not show the waiting spinner if the request is a fast, non-blocking
         # request.
@@ -631,16 +633,23 @@ async def log_streamer(request_id: Optional[str],
         if show_request_waiting_spinner:
             yield status_msg.init()
             yield status_msg.start()
+        is_waiting_msg_logged = False
+        waiting_msg = (f'Waiting for {request_task.name!r} request to be '
+                       f'scheduled: {request_id}')
         while request_task.status < requests_lib.RequestStatus.RUNNING:
             if show_request_waiting_spinner:
-                yield status_msg.update(
-                    f'[dim]Waiting for {request_task.name} request: '
-                    f'{request_id}[/dim]')
+                yield status_msg.update(f'[dim]{waiting_msg}[/dim]')
+            elif plain_logs and not is_waiting_msg_logged:
+                is_waiting_msg_logged = True
+                # Use smaller padding (1024 bytes) to force browser rendering
+                yield f'{waiting_msg}' + ' ' * 4096 + '\n'
             # Sleep 0 to yield, so other coroutines can run. This busy waiting
             # loop is performance critical for short-running requests, so we do
             # not want to yield too long.
             await asyncio.sleep(0)
             request_task = requests_lib.get_request(request_id)
+            if not follow:
+                break
         if show_request_waiting_spinner:
             yield status_msg.stop()
 
@@ -662,7 +671,14 @@ async def log_streamer(request_id: Optional[str],
                 if request_id is not None:
                     request_task = requests_lib.get_request(request_id)
                     if request_task.status > requests_lib.RequestStatus.RUNNING:
+                        if (request_task.status ==
+                                requests_lib.RequestStatus.CANCELLED):
+                            yield (f'{request_task.name!r} request {request_id}'
+                                   ' cancelled\n')
                         break
+                if not follow:
+                    break
+
                 # Sleep 0 to yield, so other coroutines can run. This busy
                 # waiting loop is performance critical for short-running
                 # requests, so we do not want to yield too long.
@@ -678,17 +694,41 @@ async def log_streamer(request_id: Optional[str],
                     # requests, so we do not want to yield too long.
                     await asyncio.sleep(0)
                     continue
-                line_str = common_utils.remove_color(line_str)
             yield line_str
             await asyncio.sleep(0)  # Allow other tasks to run
 
 
-@app.get('/stream')
+@app.get('/api/stream')
 async def stream(
-        request_id: Optional[str] = None,
-        log_path: Optional[str] = None,
-        plain_logs: bool = True,
-        tail: Optional[int] = None) -> fastapi.responses.StreamingResponse:
+    request: fastapi.Request,
+    request_id: Optional[str] = None,
+    log_path: Optional[str] = None,
+    tail: Optional[int] = None,
+    follow: bool = True,
+    # Choices: 'auto', 'plain', 'html', 'console'
+    # 'auto': automatically choose between HTML and plain text
+    #         based on the request source
+    # 'plain': plain text for HTML clients
+    # 'html': HTML for browsers
+    # 'console': console for CLI/API clients
+    # pylint: disable=redefined-builtin
+    format: Literal['auto', 'plain', 'html', 'console'] = 'auto',
+) -> fastapi.responses.Response:
+    """Streams the logs of a request.
+
+    When format is 'auto' and the request is coming from a browser, the response
+    is a HTML page with JavaScript to handle streaming, which will request the
+    API server again with format='plain' to get the actual log content.
+
+    Args:
+        request_id: Request ID to stream logs for.
+        log_path: Log path to stream logs for.
+        tail: Number of lines to stream from the end of the log file.
+        follow: Whether to follow the log file.
+        format: Response format - 'auto' (HTML for browsers, plain for HTML
+            clients, console for CLI/API clients), 'plain' (force plain text),
+            'html' (force HTML), or 'console' (force console)
+    """
     if request_id is not None and log_path is not None:
         raise fastapi.HTTPException(
             status_code=400,
@@ -699,6 +739,30 @@ async def stream(
         if request_id is None:
             raise fastapi.HTTPException(status_code=404,
                                         detail='No request found')
+
+    # Determine if we should use HTML format
+    if format == 'auto':
+        # Check if request is coming from a browser
+        user_agent = request.headers.get('user-agent', '').lower()
+        use_html = any(browser in user_agent
+                       for browser in ['mozilla', 'chrome', 'safari', 'edge'])
+    else:
+        use_html = format == 'html'
+
+    if use_html:
+        # Return HTML page with JavaScript to handle streaming
+        stream_url = request.url.include_query_params(format='plain')
+        html_dir = pathlib.Path(__file__).parent / 'html'
+        with open(html_dir / 'log.html', 'r', encoding='utf-8') as file:
+            html_content = file.read()
+        return fastapi.responses.HTMLResponse(
+            html_content.replace('{stream_url}', str(stream_url)),
+            headers={
+                'Cache-Control': 'no-cache, no-transform',
+                'X-Accel-Buffering': 'no'
+            })
+
+    # Original plain text streaming logic
     if request_id is not None:
         request_task = requests_lib.get_request(request_id)
         if request_task is None:
@@ -727,21 +791,28 @@ async def stream(
 
         log_path_to_stream = resolved_log_path
     return fastapi.responses.StreamingResponse(
-        log_streamer(request_id, log_path_to_stream, plain_logs, tail),
+        content=log_streamer(request_id,
+                             log_path_to_stream,
+                             plain_logs=format == 'plain',
+                             tail=tail,
+                             follow=follow),
         media_type='text/plain',
         headers={
-            'Cache-Control': 'no-cache',
-            'X-Accel-Buffering': 'no'  # Disable nginx buffering if present
-        })
+            'Cache-Control': 'no-cache, no-transform',
+            'X-Accel-Buffering': 'no',
+            'Transfer-Encoding': 'chunked'
+        },
+    )
 
 
-@app.post('/abort')
-async def abort(request: fastapi.Request, abort_body: payloads.RequestIdBody):
-    """Abort requests."""
+@app.post('/api/cancel')
+async def api_cancel(request: fastapi.Request,
+                     abort_body: payloads.RequestIdBody) -> None:
+    """Cancels requests."""
     # Create a list of target abort requests.
     request_ids = []
     if abort_body.all:
-        print('Aborting all requests...')
+        print('Cancelling all requests...')
         request_ids = [
             request_task.request_id for request_task in
             requests_lib.get_request_tasks(status=[
@@ -751,25 +822,25 @@ async def abort(request: fastapi.Request, abort_body: payloads.RequestIdBody):
                                            user_id=abort_body.user_id)
         ]
     if abort_body.request_id is not None:
-        print(f'Aborting request ID: {abort_body.request_id}')
+        print(f'Cancelling request ID: {abort_body.request_id}')
         request_ids.append(abort_body.request_id)
 
     # Abort the target requests.
     executor.schedule_request(
         request_id=request.state.request_id,
-        request_name='kill_requests',
+        request_name='cancel_requests',
         request_body=payloads.KillRequestProcessesBody(request_ids=request_ids),
         func=requests_lib.kill_requests,
         schedule_type=requests_lib.ScheduleType.NON_BLOCKING,
     )
 
 
-@app.get('/requests')
-async def requests(
+@app.get('/api/status')
+async def api_status(
     request_id: Optional[str] = None,
     all: bool = False  # pylint: disable=redefined-builtin
 ) -> List[requests_lib.RequestPayload]:
-    """Get the list of requests."""
+    """Gets the list of requests."""
     if request_id is None:
         statuses = None
         if not all:
@@ -789,17 +860,31 @@ async def requests(
         return [request_task.readable_encode()]
 
 
-@app.get('/health', response_class=fastapi.responses.PlainTextResponse)
-async def health() -> str:
-    return (f'SkyPilot API Server: {colorama.Style.BRIGHT}{colorama.Fore.GREEN}'
-            f'Healthy{colorama.Style.RESET_ALL}\n')
+@app.get('/api/health')
+async def health() -> Dict[str, str]:
+    """Checks the health of the API server.
+
+    Returns:
+        A dictionary with the following keys:
+        - status: str; The status of the API server.
+        - api_version: str; The API version of the API server.
+        - commit: str; The commit hash of SkyPilot used for API server.
+        - version: str; The version of SkyPilot used for API server.
+    """
+    return {
+        'status': common.ApiServerStatus.HEALTHY.value,
+        'api_version': server_constants.API_VERSION,
+        'commit': sky.__commit__,
+        'version': sky.__version__,
+    }
 
 
 @app.websocket('/kubernetes-pod-ssh-proxy')
 async def kubernetes_pod_ssh_proxy(
     websocket: fastapi.WebSocket,
-    cluster_name_body: payloads.ClusterNameBody = fastapi.Depends()):
-    """Proxies SSH port 22 to the Kubernetes pod with websocket."""
+    cluster_name_body: payloads.ClusterNameBody = fastapi.Depends()
+) -> None:
+    """Proxies SSH to the Kubernetes pod with websocket."""
     await websocket.accept()
     cluster_name = cluster_name_body.cluster_name
     logger.info(f'WebSocket connection accepted for cluster: {cluster_name}')
@@ -890,7 +975,7 @@ async def kubernetes_pod_ssh_proxy(
 
 if __name__ == '__main__':
     import uvicorn
-    requests_lib.reset_db()
+    requests_lib.reset_db_and_logs()
 
     parser = argparse.ArgumentParser()
     parser.add_argument('--host', default='0.0.0.0')
@@ -905,8 +990,8 @@ if __name__ == '__main__':
     workers = []
     try:
         workers = executor.start(cmd_args.deploy)
-        logger.info('Starting SkyPilot server')
-        uvicorn.run('sky.api.rest:app',
+        logger.info('Starting SkyPilot API server')
+        uvicorn.run('sky.server.server:app',
                     host=cmd_args.host,
                     port=cmd_args.port,
                     reload=cmd_args.reload,

@@ -81,7 +81,7 @@ Run ``sky api login`` to connect to the API server.
 .. code-block:: console
 
     $ sky api login
-    Enter your SkyPilot server endpoint: http://skypilot:password@1.2.3.4:30050
+    Enter your SkyPilot API server endpoint: http://skypilot:password@1.2.3.4:30050
 
 This will save the API server endpoint to your ``~/.sky/config.yaml`` file.
 
@@ -90,7 +90,7 @@ To verify that the API server is working, run ``sky api info``:
 .. code-block:: console
 
     $ sky api info
-    Using SkyPilot server: http://skypilot:password@1.2.3.4:30050 (version: 1.0.0-dev0, commit: 6864695)
+    Using SkyPilot API server: http://skypilot:password@1.2.3.4:30050 (version: 1.0.0-dev0, commit: 6864695)
 
 Asynchronous request execution
 ------------------------------
@@ -114,12 +114,12 @@ For example, when a user runs ``sky launch -c my-cluster``, the following output
     Launching a new cluster 'my-cluster'. Proceed? [Y/n]:
     ⚙︎ Launching on Kubernetes.
     └── Pod is up.
-    ⠴ Preparing SkyPilot runtime (2/3 - dependencies)  View logs: sky api get -l sky-2024-12-13-05-27-22-754475/provision.log
+    ⠴ Preparing SkyPilot runtime (2/3 - dependencies)  View logs: sky api logs -l sky-2024-12-13-05-27-22-754475/provision.log
 
 
 When a user interrupts the command with ``Ctrl+C``, the request will continue
 running in the background on the server. The user can reattach to the logs of
-the request with ``sky api get``, or abort the request with ``sky api abort``.
+the request with ``sky api logs``, or cancel the request with ``sky api cancel``.
 
 .. code-block:: console
 
@@ -127,12 +127,12 @@ the request with ``sky api get``, or abort the request with ``sky api abort``.
     ...
     ^C
     ⚙︎ Request will continue running asynchronously.
-    ├── View logs: sky api get f059d660-29c5-4f22-bd13-ee5d62d974c7
+    ├── View logs: sky api logs f059d660-29c5-4f22-bd13-ee5d62d974c7
     ├── Or, visit: http://xx.xx.xx.xx:30050/stream?request_id=f059d660-29c5-4f22-bd13-ee5d62d974c7
-    └── To abort the request, run: sky api abort f059d660-29c5-4f22-bd13-ee5d62d974c7
+    └── To abort the request, run: sky api cancel f059d660-29c5-4f22-bd13-ee5d62d974c7
 
 
-As a special case, terminating (``sky down my-cluster``) or stopping (``sky stop my-cluster``) a cluster will automatically abort all existing requests on the cluster, including both ``PENDING`` and ``RUNNING`` requests.
+As a special case, terminating (``sky down my-cluster``) or stopping (``sky stop my-cluster``) a cluster will automatically cancel all existing requests on the cluster, including both ``PENDING`` and ``RUNNING`` requests.
 
 .. note::
 
@@ -148,19 +148,19 @@ See :ref:`sky-api-cli` for more details.
 List all requests
 ^^^^^^^^^^^^^^^^^
 
-To view all requests on the server, run ``sky api ls``.
+To view all requests on the server, run ``sky api status``.
 
 .. code-block:: console
 
     $ # List all ongoing requests
-    $ sky api ls
+    $ sky api status
     ID                                    User             Name    Created         Status
     0d35ffa7-2813-4f3b-95c2-c5ab2238df50  user2            logs    a few secs ago  RUNNING
     a9d59602-b82b-4cf8-a10f-5cde4dd76f29  user1            launch  a few secs ago  RUNNING
     skypilot-status-refresh-daemon        skypilot-system  status  5 hrs ago       RUNNING
 
     $ # List all finished and ongoing requests
-    $ sky api ls -a
+    $ sky api status -a
 
 
 Get API server URL and version
@@ -171,7 +171,7 @@ To get the current API server info (URL and version), run ``sky api info``.
 .. code-block:: console
 
     $ sky api info
-    Using SkyPilot server: http://skypilot:alpha1@1.2.3.4:30050 (version: 1.0.0-dev0, commit: 6864695)
+    Using SkyPilot API server: http://skypilot:alpha1@1.2.3.4:30050 (version: 1.0.0-dev0, commit: 6864695)
 
 
 Stop and restart local API server

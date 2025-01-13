@@ -1,4 +1,6 @@
 """Common data structures and constants used in the API."""
+import dataclasses
+import enum
 import functools
 import os
 import pathlib
@@ -19,9 +21,9 @@ import requests
 from sky import exceptions
 from sky import sky_logging
 from sky import skypilot_config
-from sky.api import constants as api_constants
 from sky.data import data_utils
 from sky.data import storage_utils
+from sky.server import constants as server_constants
 from sky.skylet import constants
 from sky.utils import common_utils
 from sky.utils import rich_utils
@@ -32,13 +34,27 @@ if typing.TYPE_CHECKING:
     from sky import dag as dag_lib
 
 DEFAULT_SERVER_URL = 'http://0.0.0.0:46580'
-API_SERVER_CMD = 'python -m sky.api.rest'
-CLIENT_DIR = pathlib.Path('~/.sky/clients')
+API_SERVER_CMD = 'python -m sky.server.server'
+CLIENT_DIR = pathlib.Path('~/.sky/api_server/clients')
 RETRY_COUNT_ON_TIMEOUT = 3
 FILE_UPLOAD_LOGS_DIR = os.path.join(constants.SKY_LOGS_DIRECTORY,
                                     'file_uploads')
+RequestId = str
+ApiVersion = Optional[str]
 
 logger = sky_logging.init_logger(__name__)
+
+
+class ApiServerStatus(enum.Enum):
+    HEALTHY = 'healthy'
+    UNHEALTHY = 'unhealthy'
+    VERSION_MISMATCH = 'version_mismatch'
+
+
+@dataclasses.dataclass
+class ApiServerInfo:
+    status: ApiServerStatus
+    api_version: ApiVersion
 
 
 @functools.lru_cache()
@@ -55,37 +71,50 @@ def is_api_server_local():
     return get_server_url() == DEFAULT_SERVER_URL
 
 
-def is_api_server_running() -> bool:
+def get_api_server_status() -> ApiServerInfo:
     time_out_try_count = 1
     server_url = get_server_url()
     while time_out_try_count <= RETRY_COUNT_ON_TIMEOUT:
         try:
-            response = requests.get(f'{server_url}/health', timeout=2.5)
-            return response.status_code == 200
+            response = requests.get(f'{server_url}/api/health', timeout=2.5)
+            if response.status_code == 200:
+                result = response.json()
+                if result['api_version'] == server_constants.API_VERSION:
+                    return ApiServerInfo(status=ApiServerStatus.HEALTHY,
+                                         api_version=result['api_version'])
+                else:
+                    return ApiServerInfo(
+                        status=ApiServerStatus.VERSION_MISMATCH,
+                        api_version=result['api_version'])
+            else:
+                return ApiServerInfo(status=ApiServerStatus.UNHEALTHY,
+                                     api_version=None)
         except requests.exceptions.Timeout as e:
             if time_out_try_count == RETRY_COUNT_ON_TIMEOUT:
                 with ux_utils.print_exception_no_traceback():
-                    raise exceptions.APIServerConnectionError(server_url) from e
+                    raise exceptions.ApiServerConnectionError(server_url) from e
             time_out_try_count += 1
             continue
         except requests.exceptions.ConnectionError:
-            return False
+            return ApiServerInfo(status=ApiServerStatus.UNHEALTHY,
+                                 api_version=None)
 
-    return False
+    return ApiServerInfo(status=ApiServerStatus.UNHEALTHY, api_version=None)
 
 
 def start_uvicorn_in_background(reload: bool = False, deploy: bool = False):
     # Check available memory before starting the server.
     avail_mem_size_gb: float = psutil.virtual_memory().available / (1024**3)
-    if avail_mem_size_gb <= api_constants.MIN_AVAIL_MEM_GB:
+    if avail_mem_size_gb <= server_constants.MIN_AVAIL_MEM_GB:
         logger.warning(
-            f'{colorama.Fore.YELLOW} Your SkyPilot server machine only has '
+            f'{colorama.Fore.YELLOW} Your SkyPilot API server machine only has '
             f'{avail_mem_size_gb:.1f} GB of memory available. '
-            f'Recommend at least {api_constants.MIN_AVAIL_MEM_GB} GB to run '
+            f'Recommend at least {server_constants.MIN_AVAIL_MEM_GB} GB to run '
             f'heavier loads on SkyPilot and enjoy better performance.'
             f'{colorama.Style.RESET_ALL}')
     log_path = os.path.expanduser(constants.API_SERVER_LOGS)
     os.makedirs(os.path.dirname(log_path), exist_ok=True)
+
     # The command to run uvicorn. Adjust the app:app to your application's
     # location.
     api_server_cmd = API_SERVER_CMD
@@ -97,33 +126,32 @@ def start_uvicorn_in_background(reload: bool = False, deploy: bool = False):
 
     # Start the uvicorn process in the background and don't wait for it.
     subprocess.Popen(cmd, shell=True)
+
+    # Wait for the server to start until timeout.
     server_url = get_server_url()
-    # Wait for the server to start.
-    retry_cnt = 0
+    # Conservative upper time bound for starting the server based on profiling.
+    timeout_sec = 12
+    start_time = time.time()
     while True:
         try:
-            # TODO: Should check the process is running as well.
-            requests.get(f'{server_url}/health', timeout=1)
+            requests.get(f'{server_url}/api/health', timeout=1)
             break
         except requests.exceptions.ConnectionError as e:
-            # TODO(zhwu): this should be made as small as possible to avoid
-            # unnecessary delays.
-            if retry_cnt < 25:
-                retry_cnt += 1
+            if time.time() - start_time < timeout_sec:
+                time.sleep(0.5)
             else:
                 with ux_utils.print_exception_no_traceback():
                     raise RuntimeError(
-                        'Failed to connect to SkyPilot server at '
+                        'Failed to connect to SkyPilot API server at '
                         f'{server_url}. '
                         f'\nView logs at: {constants.API_SERVER_LOGS}') from e
-            time.sleep(0.5)
 
 
 def handle_request_error(response):
     if response.status_code != 200:
         with ux_utils.print_exception_no_traceback():
             raise RuntimeError(
-                'Failed to process response from SkyPilot server at '
+                'Failed to process response from SkyPilot API server at '
                 f'{get_server_url()}. '
                 f'Response: {response.status_code} '
                 f'{response.text}')
@@ -134,24 +162,36 @@ def get_request_id(response) -> str:
     return response.headers.get('X-Request-ID')
 
 
-def check_health(func):
+def check_server_healthy_or_start(func):
 
     @functools.wraps(func)
     def wrapper(*args,
                 api_server_reload: bool = False,
                 deploy: bool = False,
                 **kwargs):
-        if is_api_server_running():
+        api_server_info = get_api_server_status()
+        if api_server_info.status == ApiServerStatus.HEALTHY:
             return func(*args, **kwargs)
+        elif api_server_info.status == ApiServerStatus.VERSION_MISMATCH:
+            with ux_utils.print_exception_no_traceback():
+                raise RuntimeError(
+                    f'{colorama.Fore.YELLOW}SkyPilot API server is too old: '
+                    f'v{api_server_info.api_version} (client version is '
+                    f'v{server_constants.API_VERSION}). '
+                    'Please restart the SkyPilot API server with: '
+                    'sky api stop; sky api start'
+                    f'{colorama.Style.RESET_ALL}')
+
         server_url = get_server_url()
 
-        # Automatically start a SkyPilot server locally.
+        # Automatically start a SkyPilot API server locally.
         # Lock to prevent multiple processes from starting the server at the
         # same time, causing issues with database initialization.
         with filelock.FileLock(
                 os.path.expanduser(constants.API_SERVER_CREATION_LOCK_PATH)):
-            if not is_api_server_running():
-                with rich_utils.client_status('Starting SkyPilot server'):
+            api_server_info = get_api_server_status()
+            if api_server_info.status == ApiServerStatus.UNHEALTHY:
+                with rich_utils.client_status('Starting SkyPilot API server'):
                     if server_url == DEFAULT_SERVER_URL:
                         logger.info(f'{colorama.Style.DIM}Failed to connect to '
                                     f'SkyPilot API server at {server_url}. '
@@ -164,7 +204,7 @@ def check_health(func):
                                 'SkyPilot API server started.'))
                     else:
                         with ux_utils.print_exception_no_traceback():
-                            raise exceptions.APIServerConnectionError(
+                            raise exceptions.ApiServerConnectionError(
                                 server_url)
         return func(*args, **kwargs)
 
@@ -177,9 +217,18 @@ def upload_mounts_to_api_server(dag: 'sky.Dag',
 
     This function needs to be called after sdk.validate(),
     as the file paths need to be expanded to keep file_mounts_mapping
-    aligned with the actual task uploaded to SkyPilot server.
+    aligned with the actual task uploaded to SkyPilot API server.
+
+    Args:
+        dag: The dag where the file mounts are defined.
+        workdir_only: Whether to only upload the workdir, which is used for
+            `exec`, as it does not need other files/folders in file_mounts.
+
+    Returns:
+        The dag with the file_mounts_mapping updated, which maps the original
+        file paths to the full path, so that on API server, the file paths can
+        be retrieved by adding prefix to the full path.
     """
-    # TODO(zhwu): upload user config file at `~/.sky/config.yaml`
     if is_api_server_local():
         return dag
 
@@ -228,7 +277,7 @@ def upload_mounts_to_api_server(dag: 'sky.Dag',
                                 f'{time.strftime("%Y-%m-%d-%H%M%S")}.log')
         with rich_utils.client_status(
                 ux_utils.spinner_message(
-                    'Uploading files to the SkyPilot server',
+                    'Uploading files to the SkyPilot API server',
                     log_file,
                     is_local=True)):
             with tempfile.NamedTemporaryFile('wb+',
@@ -256,7 +305,9 @@ def upload_mounts_to_api_server(dag: 'sky.Dag',
                         files=files)
                     if response.status_code != 200:
                         err_msg = response.content.decode('utf-8')
-                        raise RuntimeError(f'Failed to upload files: {err_msg}')
+                        with ux_utils.print_exception_no_traceback():
+                            raise RuntimeError(
+                                f'Failed to upload files: {err_msg}')
                     f_log.write(f'Finished uploading these files in '
                                 f'{time.time() - start}s: {upload_list}\n')
                     logger.info(
@@ -267,8 +318,25 @@ def upload_mounts_to_api_server(dag: 'sky.Dag',
     return dag
 
 
-def process_mounts_in_task(task: str, env_vars: Dict[str, str],
-                           workdir_only: bool) -> 'dag_lib.Dag':
+def process_mounts_in_task_on_api_server(task: str, env_vars: Dict[str, str],
+                                         workdir_only: bool) -> 'dag_lib.Dag':
+    """Translates the file mounts path in a task to the path on API server.
+
+    When a task involves file mounts, the client will invoke
+    `upload_mounts_to_api_server` above to upload those local files to the API
+    server first. This function will then translates the paths in the task to
+    be the actual file paths on the API server, based on the
+    `file_mounts_mapping` in the task set by the client.
+
+    Args:
+        task: The task to be translated.
+        env_vars: The environment variables of the task.
+        workdir_only: Whether to only translate the workdir, which is used for
+            `exec`, as it does not need other files/folders in file_mounts.
+
+    Returns:
+        The translated task as a single-task dag.
+    """
     from sky.utils import dag_utils  # pylint: disable=import-outside-toplevel
 
     user_hash = env_vars.get(constants.USER_ID_ENV_VAR, 'unknown')
@@ -331,6 +399,8 @@ def process_mounts_in_task(task: str, env_vars: Dict[str, str],
                 else:
                     raise ValueError(f'Unexpected file_mounts value: {src}')
 
+    # We can switch to using string, but this is to make it easier to debug, by
+    # persisting the translated task yaml file.
     translated_client_task_path = client_dir / f'{task_id}_translated.yaml'
     common_utils.dump_yaml(str(translated_client_task_path), task_configs)
 
@@ -338,7 +408,8 @@ def process_mounts_in_task(task: str, env_vars: Dict[str, str],
     return dag
 
 
-def api_server_logs_dir_prefix(user_hash: Optional[str] = None) -> pathlib.Path:
+def api_server_user_logs_dir_prefix(
+        user_hash: Optional[str] = None) -> pathlib.Path:
     if user_hash is None:
         user_hash = common_utils.get_user_hash()
     return CLIENT_DIR / user_hash / 'sky_logs'

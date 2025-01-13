@@ -360,15 +360,16 @@ class NoClusterLaunchedError(Exception):
     pass
 
 
-class RequestAborted(Exception):
-    """Raised when a request is aborted."""
+class RequestCancelled(Exception):
+    """Raised when a request is cancelled."""
     pass
 
 
-class APIServerConnectionError(RuntimeError):
+class ApiServerConnectionError(RuntimeError):
+    """Raised when the API server cannot be connected."""
 
     def __init__(self, server_url: str):
         super().__init__(
-            f'Could not connect to SkyPilot server at {server_url}. '
+            f'Could not connect to SkyPilot API server at {server_url}. '
             f'Please ensure that the server is running. '
-            f'Try: curl {server_url}/health')
+            f'Try: curl {server_url}/api/health')

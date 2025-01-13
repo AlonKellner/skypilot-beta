@@ -6,6 +6,7 @@ import functools
 import json
 import os
 import pathlib
+import shutil
 import signal
 import sqlite3
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -16,10 +17,11 @@ import filelock
 from sky import exceptions
 from sky import global_user_state
 from sky import sky_logging
-from sky.api import constants as api_constants
-from sky.api.requests import payloads
-from sky.api.requests.serializers import decoders
-from sky.api.requests.serializers import encoders
+from sky.server import common as server_common
+from sky.server import constants as server_constants
+from sky.server.requests import payloads
+from sky.server.requests.serializers import decoders
+from sky.server.requests.serializers import encoders
 from sky.utils import common_utils
 from sky.utils import db_utils
 
@@ -29,7 +31,7 @@ logger = sky_logging.init_logger(__name__)
 REQUEST_TABLE = 'requests'
 COL_CLUSTER_NAME = 'cluster_name'
 COL_USER_ID = 'user_id'
-TASK_LOG_PATH_PREFIX = '~/sky_logs/api_server/requests'
+REQUEST_LOG_PATH_PREFIX = '~/sky_logs/api_server/requests'
 
 # TODO(zhwu): For scalability, there are several TODOs:
 # [x] Have a way to queue requests.
@@ -44,7 +46,7 @@ class RequestStatus(enum.Enum):
     RUNNING = 'RUNNING'
     SUCCEEDED = 'SUCCEEDED'
     FAILED = 'FAILED'
-    ABORTED = 'ABORTED'
+    CANCELLED = 'CANCELLED'
 
     def __gt__(self, other):
         return (list(RequestStatus).index(self) >
@@ -57,10 +59,10 @@ class RequestStatus(enum.Enum):
 
 _STATUS_TO_COLOR = {
     RequestStatus.PENDING: colorama.Fore.BLUE,
-    RequestStatus.RUNNING: colorama.Fore.YELLOW,
+    RequestStatus.RUNNING: colorama.Fore.GREEN,
     RequestStatus.SUCCEEDED: colorama.Fore.GREEN,
     RequestStatus.FAILED: colorama.Fore.RED,
-    RequestStatus.ABORTED: colorama.Fore.WHITE,
+    RequestStatus.CANCELLED: colorama.Fore.WHITE,
 }
 
 REQUEST_COLUMNS = [
@@ -123,7 +125,7 @@ class Request:
     @property
     def log_path(self) -> pathlib.Path:
         log_path_prefix = pathlib.Path(
-            TASK_LOG_PATH_PREFIX).expanduser().absolute()
+            REQUEST_LOG_PATH_PREFIX).expanduser().absolute()
         log_path_prefix.mkdir(parents=True, exist_ok=True)
         log_path = (log_path_prefix / self.request_id).with_suffix('.log')
         return log_path
@@ -287,6 +289,9 @@ class InternalRequestEvent:
 
 # Register the events to run in the background.
 INTERNAL_REQUEST_EVENTS = [
+    # This status refresh daemon can cause the autostopp'ed/autodown'ed cluster
+    # set to updated status automatically, without showing users the hint of
+    # cluster being stopped or down when `sky status -r` is called.
     InternalRequestEvent(id='skypilot-status-refresh-daemon',
                          name='status',
                          event_fn=refresh_cluster_status_event)
@@ -315,10 +320,10 @@ def kill_requests(request_ids: List[str]):
                 #   for other requests, avoiding the overhead of forking a new
                 #   process for each request.
                 os.kill(request_record.pid, signal.SIGTERM)
-            request_record.status = RequestStatus.ABORTED
+            request_record.status = RequestStatus.CANCELLED
 
 
-_DB_PATH = os.path.expanduser(api_constants.API_SERVER_REQUEST_DB_PATH)
+_DB_PATH = os.path.expanduser(server_constants.API_SERVER_REQUEST_DB_PATH)
 pathlib.Path(_DB_PATH).parents[0].mkdir(parents=True, exist_ok=True)
 
 
@@ -371,9 +376,11 @@ def init_db(func):
     return wrapper
 
 
-def reset_db():
+def reset_db_and_logs():
     """Create the database."""
     common_utils.remove_file_if_exists(_DB_PATH)
+    shutil.rmtree(REQUEST_LOG_PATH_PREFIX, ignore_errors=True)
+    shutil.rmtree(server_common.CLIENT_DIR, ignore_errors=True)
 
 
 def request_lock_path(request_id: str) -> str:

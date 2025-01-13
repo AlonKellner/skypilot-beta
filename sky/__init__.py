@@ -86,24 +86,30 @@ from sky import clouds
 from sky.admin_policy import AdminPolicy
 from sky.admin_policy import MutatedUserRequest
 from sky.admin_policy import UserRequest
-from sky.api.sdk import autostop
-from sky.api.sdk import cancel
-from sky.api.sdk import cost_report
-from sky.api.sdk import down
-from sky.api.sdk import download_logs
-from sky.api.sdk import exec  # pylint: disable=redefined-builtin
-from sky.api.sdk import get
-from sky.api.sdk import job_status
-from sky.api.sdk import launch
-from sky.api.sdk import optimize
-from sky.api.sdk import queue
-from sky.api.sdk import start
-from sky.api.sdk import status
-from sky.api.sdk import stop
-from sky.api.sdk import storage_delete
-from sky.api.sdk import storage_ls
-from sky.api.sdk import stream_and_get
-from sky.api.sdk import tail_logs
+from sky.client.sdk import api_cancel
+from sky.client.sdk import api_info
+from sky.client.sdk import api_server_logs
+from sky.client.sdk import api_start
+from sky.client.sdk import api_status
+from sky.client.sdk import api_stop
+from sky.client.sdk import autostop
+from sky.client.sdk import cancel
+from sky.client.sdk import cost_report
+from sky.client.sdk import down
+from sky.client.sdk import download_logs
+from sky.client.sdk import exec  # pylint: disable=redefined-builtin
+from sky.client.sdk import get
+from sky.client.sdk import job_status
+from sky.client.sdk import launch
+from sky.client.sdk import optimize
+from sky.client.sdk import queue
+from sky.client.sdk import start
+from sky.client.sdk import status
+from sky.client.sdk import stop
+from sky.client.sdk import storage_delete
+from sky.client.sdk import storage_ls
+from sky.client.sdk import stream_and_get
+from sky.client.sdk import tail_logs
 from sky.clouds.service_catalog import list_accelerators
 from sky.dag import Dag
 from sky.data import Storage
@@ -112,10 +118,10 @@ from sky.data import StoreType
 from sky.jobs import ManagedJobStatus
 # TODO (zhwu): These imports are for backward compatibility, and spot APIs
 # should be called with `sky.spot.xxx` instead. Remove in release 0.8.0
-from sky.jobs.api.sdk import spot_cancel
-from sky.jobs.api.sdk import spot_launch
-from sky.jobs.api.sdk import spot_queue
-from sky.jobs.api.sdk import spot_tail_logs
+from sky.jobs.client.sdk import spot_cancel
+from sky.jobs.client.sdk import spot_launch
+from sky.jobs.client.sdk import spot_queue
+from sky.jobs.client.sdk import spot_tail_logs
 from sky.optimizer import Optimizer
 from sky.resources import Resources
 from sky.skylet.job_lib import JobStatus
@@ -173,6 +179,7 @@ __all__ = [
     'Task',
     'Resources',
     # core APIs
+    'optimize',
     'launch',
     'exec',
     'spot_launch',
@@ -196,9 +203,15 @@ __all__ = [
     # core APIs Storage Management
     'storage_ls',
     'storage_delete',
-    # Request APIs
+    # API server APIs
     'get',
     'stream_and_get',
+    'api_status',
+    'api_cancel',
+    'api_info',
+    'api_start',
+    'api_stop',
+    'api_server_logs',
     # Admin Policy
     'UserRequest',
     'MutatedUserRequest',
