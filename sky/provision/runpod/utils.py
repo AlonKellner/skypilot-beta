@@ -36,6 +36,7 @@ GPU_NAME_MAP = {
     "RTX3090": "NVIDIA GeForce RTX 3090",
     "RTX3090Ti": "NVIDIA GeForce RTX 3090 Ti",
     "RTX4000-Ada": "NVIDIA RTX 4000 Ada Generation",
+    "RTX4000-SFF-Ada": "NVIDIA RTX 4000 SFF Ada Generation",
     "RTX4070Ti": "NVIDIA GeForce RTX 4070 Ti",
     "RTX4080": "NVIDIA GeForce RTX 4080",
     "RTX4080SUPER": "NVIDIA GeForce RTX 4080 SUPER",
