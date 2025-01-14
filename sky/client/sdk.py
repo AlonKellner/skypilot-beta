@@ -10,6 +10,7 @@ Usage example:
     statuses = sky.get(request_id)
 
 """
+import getpass
 import json
 import logging
 import os
@@ -60,7 +61,7 @@ def _stream_response(request_id: Optional[str],
     try:
         for line in rich_utils.decode_rich_status(response):
             if line is not None:
-                print(line, flush=True)
+                print(line, flush=True, end='')
         return get(request_id)
     except Exception:  # pylint: disable=broad-except
         logger.debug(f'To stream request logs: sky api logs {request_id}')
@@ -366,8 +367,12 @@ def launch(
     confirm_shown = False
     if need_confirmation:
         cluster_status = None
+        # TODO(SKY-998): we should reduce RTTs before launching the cluster.
         request_id = status([cluster_name], all_users=True)
         clusters = get(request_id)
+        cluster_user_hash = common_utils.get_user_hash()
+        cluster_user_hash_str = ''
+        cluster_user_name = getpass.getuser()
         if not clusters:
             # Show the optimize log before the prompt if the cluster does not
             # exist.
@@ -376,6 +381,12 @@ def launch(
         else:
             cluster_record = clusters[0]
             cluster_status = cluster_record['status']
+            cluster_user_hash = cluster_record['user_hash']
+            cluster_user_name = cluster_record['user_name']
+            if cluster_user_name == getpass.getuser():
+                # Only show the hash if the username is the same as the local
+                # username, to avoid confusion.
+                cluster_user_hash_str = f' (hash: {cluster_user_hash})'
 
         # Prompt if (1) --cluster is None, or (2) cluster doesn't exist, or (3)
         # it exists but is STOPPED.
@@ -386,8 +397,18 @@ def launch(
                 # '{clone_source_str}. '
                 'Proceed?')
         elif cluster_status == status_lib.ClusterStatus.STOPPED:
-            prompt = (f'Restarting the stopped cluster {cluster_name!r}. '
-                      'Proceed?')
+            user_name_str = ''
+            if cluster_user_hash != common_utils.get_user_hash():
+                user_name_str = (' created by another user '
+                                 f'{cluster_user_name!r}'
+                                 f'{cluster_user_hash_str}')
+            prompt = (f'Restarting the stopped cluster {cluster_name!r}'
+                      f'{user_name_str}. Proceed?')
+        elif cluster_user_hash != common_utils.get_user_hash():
+            # Prompt if the cluster was created by a different user.
+            prompt = (f'Cluster {cluster_name!r} was created by another user '
+                      f'{cluster_user_name!r}{cluster_user_hash_str}. '
+                      'Reusing the cluster. Proceed?')
         if prompt is not None:
             confirm_shown = True
             click.confirm(prompt, default=True, abort=True, show_default=True)
@@ -514,7 +535,7 @@ def exec(  # pylint: disable=redefined-builtin
 def tail_logs(cluster_name: str,
               job_id: Optional[int],
               follow: bool,
-              tail: int = 0) -> server_common.RequestId:
+              tail: int = 0) -> None:
     """Tails the logs of a job.
 
     Args:
@@ -546,7 +567,7 @@ def tail_logs(cluster_name: str,
                              stream=True,
                              timeout=(5, None))
     request_id = server_common.get_request_id(response)
-    return _stream_response(request_id, response)
+    _stream_response(request_id, response)
 
 
 @usage_lib.entrypoint
