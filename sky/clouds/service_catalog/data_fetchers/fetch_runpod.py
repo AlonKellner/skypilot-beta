@@ -106,7 +106,7 @@ def get_partial_runpod_catalog(is_secure: bool) -> pd.DataFrame:
     runpod_exploded["InstanceType"] = (
         runpod_exploded["AcceleratorCount"].astype(str)
         + "x_"
-        + runpod_exploded["id"].apply(lambda x: x.replace(" ", "-"))
+        + runpod_exploded["AcceleratorName"]
     )
     
     def format_gpu_info(row):
