@@ -472,7 +472,7 @@ def start_dashboard_forwarding(refresh: bool = False) -> Tuple[int, int]:
     remote_port = skylet_constants.SPOT_DASHBOARD_REMOTE_PORT
     free_port = common_utils.find_free_port(remote_port)
     ssh_runners = [r for r in handle.get_command_runners() if isinstance(r, SSHCommandRunner)]
-    assert len(ssh_runners) > 0, "There is no ssh command runner available, dashboard cannot be started"
+    assert len(ssh_runners) > 0, f"Dashboard cannot be started, there is no ssh command runner available: [{[type(r) for r in runners]}]"
     runner = ssh_runners[0]
     ssh_command = ' '.join(
         runner.ssh_base_command(ssh_mode=command_runner.SshMode.INTERACTIVE,
