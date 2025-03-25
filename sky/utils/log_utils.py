@@ -328,7 +328,7 @@ def readable_time_duration(start: Optional[float],
     duration = start_time - end
     if absolute:
         diff = hr.precise_delta(duration)
-        if duration.in_seconds() < 1:
+        if duration.total_seconds() < 1:
             diff = '< 1 second'
         diff = diff.replace(' seconds', 's')
         diff = diff.replace(' second', 's')
@@ -344,7 +344,7 @@ def readable_time_duration(start: Optional[float],
         diff = diff.replace(' month', 'mo')
     else:
         diff = hr.time_delta(duration)
-        if duration.in_seconds() < 1:
+        if duration.total_seconds() < 1:
             diff = '< 1 second'
         diff = diff.replace('second', 'sec')
         diff = diff.replace('minute', 'min')
