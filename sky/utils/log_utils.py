@@ -321,10 +321,10 @@ def readable_time_duration(start: Optional[float],
     if end == start == 0:
         return '-'
     if end is not None:
-        end = dt.utcfromtimestamp(end)
+        end = dt.datetime.fromtimestamp(end, dt.timezone.utc)
     else:
         end = dt.datetime.now(dt.timezone.utc)
-    start_time = dt.utcfromtimestamp(start)
+    start_time = dt.datetime.fromtimestamp(start, dt.timezone.utc)
     duration = start_time - end
     if absolute:
         diff = hr.precise_delta(duration)
