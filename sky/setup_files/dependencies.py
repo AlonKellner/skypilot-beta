@@ -22,7 +22,7 @@ install_requires = [
     'jsonschema',
     'networkx',
     'pandas>=1.3.0',
-    'pendulum',
+    'human-readable',
     # PrettyTable with version >=2.0.0 is required for the support of
     # `add_rows` method.
     'PrettyTable >= 2.0.0',
