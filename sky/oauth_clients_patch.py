@@ -3,26 +3,29 @@ import requests
 import os
 
 
+def get_oauth_iap_token(client_id):
+    from google.oauth2 import service_account
+    from google.auth.transport.requests import Request
+    
+    # Create a credentials object
+    credentials = service_account.IDTokenCredentials.from_service_account_file(
+        os.environ["GOOGLE_APPLICATION_CREDENTIALS"],
+        target_audience=client_id
+    )
+    
+    # Request the token
+    credentials.refresh(Request())
+    id_token = credentials.token
+    return id_token
+
+
 def add_oauth_header(headers: dict[str, str]) -> dict[str, str]:
-    if ("SKY_OAUTH_CLIENT_ID" in os.environ) and ("SKY_OAUTH_PROVIDER" in os.environ):
-      client_id = os.environ["SKY_OAUTH_CLIENT_ID"]
+    if "SKY_OAUTH_PROVIDER" in os.environ:
       provider = os.environ["SKY_OAUTH_PROVIDER"]
       if provider.lower() == "google":
-        import google.auth
-        from google.auth.transport.requests import Request
-        from google.oauth2 import id_token
-        
-        # Get credentials
-        credentials, project = google.auth.default()
-        
-        # Get an OpenID Connect token
-        if credentials.valid:
-            credentials.refresh(Request())
-        
-        # Get the ID token
-        open_id_token = id_token.fetch_id_token(Request(), client_id)
-      
-        headers['Authorization'] = f'Bearer {open_id_token}'
+        client_id = os.environ["SKY_OAUTH_CLIENT_ID"]
+        iap_token = get_oauth_iap_token(client_id)
+        headers['Proxy-Authorization'] = f'Bearer {iap_token}'
     return headers
 
 
@@ -33,7 +36,7 @@ def lazy_import_server_common():
 
 def add_oauth_to_server_headers(url, headers):
     lazy_import_server_common()
-    if server_common.get_server_url() in url:
+    if server_common.get_server_url().strip("/") in url:
       headers = add_oauth_header(headers)
     return headers
 
@@ -45,9 +48,17 @@ def patch_requests():
         headers = kwargs.get('headers', {})
         headers = add_oauth_to_server_headers(url, headers)
         kwargs['headers'] = headers
-        return original_request(method, url, *args, **kwargs)
+        response = original_request(method, url, *args, **kwargs)
+        content_type = response.headers.get('Content-Type', '').lower()
+        if response.history and "text/html" in content_type:
+            headers = add_oauth_header(headers)
+            kwargs['headers'] = headers
+            response = original_request(method, url, *args, **kwargs)
+        return response
+
 
     requests.request = patched_request
+    requests.api.request = patched_request
 
 
 def patch_httpx():
@@ -57,7 +68,13 @@ def patch_httpx():
         headers = kwargs.get('headers', {})
         headers = add_oauth_to_server_headers(url, headers)
         kwargs['headers'] = headers
-        return original_request(self, method, url, *args, **kwargs)
+        response = original_request(self, method, url, *args, **kwargs)
+        content_type = response.headers.get('Content-Type', '')
+        if response.history and "text/html" in content_type:
+            headers = add_oauth_header(url, headers)
+            kwargs['headers'] = headers
+            response = original_request(self, method, url, *args, **kwargs)
+        return response
 
     httpx.Client.request = patched_request
 
