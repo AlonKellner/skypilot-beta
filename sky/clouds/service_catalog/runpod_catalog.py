@@ -9,11 +9,13 @@ from typing import Dict, List, Optional, Tuple, Union
 
 from sky.clouds.service_catalog import common
 from sky.utils import ux_utils
+from sky.clouds.service_catalog.constants import CATALOG_DIR, CATALOG_SCHEMA_VERSION
+from sky.clouds.service_catalog.data_fetchers.fetch_runpod import update_runpod_catalog
 
 if typing.TYPE_CHECKING:
     from sky.clouds import cloud
 
-_df = common.read_catalog('runpod/vms.csv')
+_df = update_runpod_catalog(f"{CATALOG_DIR}/{CATALOG_SCHEMA_VERSION}/runpod/vms.csv")
 
 
 def instance_type_exists(instance_type: str) -> bool:
