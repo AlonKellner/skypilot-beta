@@ -1,11 +1,13 @@
 """Logging utils."""
 import enum
+import datetime as dt
 import time
 import types
 import typing
 from typing import Callable, Iterator, List, Optional, TextIO, Type
 
 import colorama
+import human_readable as hr
 import prettytable
 
 from sky import sky_logging
@@ -14,13 +16,6 @@ from sky.utils import rich_utils
 from sky.utils import ux_utils
 
 logger = sky_logging.init_logger(__name__)
-
-if typing.TYPE_CHECKING:
-    # slow due to https://github.com/python-pendulum/pendulum/issues/808
-    # FIXME(aylei): bump pendulum if it get fixed
-    import pendulum
-else:
-    pendulum = adaptors_common.LazyImport('pendulum')
 
 
 class LineProcessor(object):
@@ -326,12 +321,14 @@ def readable_time_duration(start: Optional[float],
     if end == start == 0:
         return '-'
     if end is not None:
-        end = pendulum.from_timestamp(end)
-    start_time = pendulum.from_timestamp(start)
-    duration = start_time.diff(end)
+        end = dt.datetime.fromtimestamp(end, dt.timezone.utc)
+    else:
+        end = dt.datetime.now(dt.timezone.utc)
+    start_time = dt.datetime.fromtimestamp(start, dt.timezone.utc)
+    duration = end - start_time
     if absolute:
-        diff = start_time.diff(end).in_words()
-        if duration.in_seconds() < 1:
+        diff = hr.precise_delta(duration)
+        if duration.total_seconds() < 1:
             diff = '< 1 second'
         diff = diff.replace(' seconds', 's')
         diff = diff.replace(' second', 's')
@@ -346,8 +343,8 @@ def readable_time_duration(start: Optional[float],
         diff = diff.replace(' months', 'mo')
         diff = diff.replace(' month', 'mo')
     else:
-        diff = start_time.diff_for_humans(end)
-        if duration.in_seconds() < 1:
+        diff = hr.time_delta(duration)
+        if duration.total_seconds() < 1:
             diff = '< 1 second'
         diff = diff.replace('second', 'sec')
         diff = diff.replace('minute', 'min')
