@@ -20,6 +20,7 @@
 # > pytest tests/smoke_tests/test_cluster_job.py --generic-cloud aws
 
 import pathlib
+import re
 import tempfile
 import textwrap
 from typing import Dict
@@ -442,10 +443,13 @@ def test_multi_echo(generic_cloud: str):
                 job_id=i + 1,
                 job_status=[sky.JobStatus.SUCCEEDED],
                 timeout=120) for i in range(32)
-        ] +
-        # Ensure monitor/autoscaler didn't crash on the 'assert not
-        # unfulfilled' error.  If process not found, grep->ssh returns 1.
-        [f'ssh {name} \'ps aux | grep "[/]"monitor.py\''],
+        ] + [
+            # ssh record will only be created on cli command like sky status on client side.
+            f'sky status {name}',
+            # Ensure monitor/autoscaler didn't crash on the 'assert not
+            # unfulfilled' error.  If process not found, grep->ssh returns 1.
+            f'ssh {name} \'ps aux | grep "[/]"monitor.py\''
+        ],
         f'sky down -y {name}',
         timeout=20 * 60,
     )
@@ -769,7 +773,7 @@ def test_task_labels_aws():
             'task_labels_aws',
             [
                 smoke_tests_utils.launch_cluster_for_cloud_cmd('aws', name),
-                f'sky launch -y -c {name} {file_path}',
+                f'sky launch -y -c {name} {smoke_tests_utils.LOW_RESOURCE_ARG} {file_path}',
                 # Verify with aws cli that the tags are set.
                 smoke_tests_utils.run_cloud_cmd_on_cluster(
                     name, 'aws ec2 describe-instances '
@@ -801,7 +805,7 @@ def test_task_labels_gcp():
             'task_labels_gcp',
             [
                 smoke_tests_utils.launch_cluster_for_cloud_cmd('gcp', name),
-                f'sky launch -y -c {name} {file_path}',
+                f'sky launch -y -c {name} {smoke_tests_utils.LOW_RESOURCE_ARG} {file_path}',
                 # Verify with gcloud cli that the tags are set
                 smoke_tests_utils.run_cloud_cmd_on_cluster(
                     name,
@@ -833,7 +837,7 @@ def test_task_labels_kubernetes():
             [
                 smoke_tests_utils.launch_cluster_for_cloud_cmd(
                     'kubernetes', name),
-                f'sky launch -y -c {name} {file_path}',
+                f'sky launch -y -c {name} {smoke_tests_utils.LOW_RESOURCE_ARG} {file_path}',
                 # Verify with kubectl that the labels are set.
                 smoke_tests_utils.run_cloud_cmd_on_cluster(
                     name, 'kubectl get pods '
@@ -1864,5 +1868,39 @@ def test_long_setup_run_script(generic_cloud: str):
                 f'sky logs {name} --status 3',
             ],
             f'sky down -y {name}',
+        )
+        smoke_tests_utils.run_one_test(test)
+
+
+# ---------- Test min-gpt on Kubernetes ----------
+@pytest.mark.kubernetes
+@pytest.mark.resource_heavy
+def test_min_gpt_kubernetes():
+    name = smoke_tests_utils.get_cluster_name()
+    original_yaml_path = 'examples/distributed-pytorch/train.yaml'
+
+    with open(original_yaml_path, 'r') as f:
+        content = f.read()
+
+    # Let the train exit after 1 epoch
+    modified_content = content.replace('main.py',
+                                       'main.py trainer_config.max_epochs=1')
+
+    modified_content = re.sub(r'accelerators:\s*[^\n]+', 'accelerators: T4',
+                              modified_content)
+
+    # Create a temporary YAML file with the modified content
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml') as f:
+        f.write(modified_content)
+        f.flush()
+
+        test = smoke_tests_utils.Test(
+            'min_gpt_kubernetes',
+            [
+                f'sky launch -y -c {name} --cloud kubernetes {f.name}',
+                f'sky logs {name} 1 --status',
+            ],
+            f'sky down -y {name}',
+            timeout=20 * 60,
         )
         smoke_tests_utils.run_one_test(test)
