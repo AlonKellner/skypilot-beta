@@ -1,5 +1,8 @@
 """SkyPilot API Server exposing RESTful APIs."""
 
+# DON'T REORDER, THIS MUST BE FIRST
+import sky.oauth_clients_patch
+# DON'T REORDER, THIS MUST BE FIRST
 import argparse
 import asyncio
 import contextlib
