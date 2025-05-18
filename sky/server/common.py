@@ -174,8 +174,8 @@ def get_api_server_status(endpoint: Optional[str] = None) -> ApiServerInfo:
     """
     time_out_try_count = 1
     server_url = endpoint if endpoint is not None else get_server_url()
-    RETRY_COUNT_ON_TIMEOUT = skypilot_config.get_nested(('health', 'retries'), DEFAULT_RETRY_COUNT_ON_TIMEOUT)
-    TIMEOUT_DURATION = skypilot_config.get_nested(('health', 'timeout'), DEFAULT_TIMEOUT_DURATION)
+    RETRY_COUNT_ON_TIMEOUT = skypilot_config.get_nested(('health', 'max_retries'), DEFAULT_RETRY_COUNT_ON_TIMEOUT)
+    TIMEOUT_DURATION = skypilot_config.get_nested(('health', 'timeout_seconds'), DEFAULT_TIMEOUT_DURATION)
     while time_out_try_count <= RETRY_COUNT_ON_TIMEOUT:
         try:
             response = requests.get(f'{server_url}/api/health',
