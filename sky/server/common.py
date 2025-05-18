@@ -52,7 +52,8 @@ API_SERVER_CMD = '-m sky.server.server'
 # mounts, logs, etc. This dir is empheral and will be cleaned up when the API
 # server is restarted.
 API_SERVER_CLIENT_DIR = pathlib.Path('~/.sky/api_server/clients')
-RETRY_COUNT_ON_TIMEOUT = 3
+DEFAULT_RETRY_COUNT_ON_TIMEOUT = 3
+DEFAULT_TIMEOUT_DURATION = 2.5
 
 # The maximum time to wait for the API server to start, set to a conservative
 # value that unlikely to reach since the server might be just starting slowly
@@ -173,10 +174,12 @@ def get_api_server_status(endpoint: Optional[str] = None) -> ApiServerInfo:
     """
     time_out_try_count = 1
     server_url = endpoint if endpoint is not None else get_server_url()
+    RETRY_COUNT_ON_TIMEOUT = skypilot_config.get_nested(('health', 'retries'), DEFAULT_RETRY_COUNT_ON_TIMEOUT)
+    TIMEOUT_DURATION = skypilot_config.get_nested(('health', 'timeout'), DEFAULT_TIMEOUT_DURATION)
     while time_out_try_count <= RETRY_COUNT_ON_TIMEOUT:
         try:
             response = requests.get(f'{server_url}/api/health',
-                                    timeout=2.5,
+                                    timeout=TIMEOUT_DURATION,
                                     cookies=get_api_cookie_jar())
             if response.status_code == 200:
                 try:
