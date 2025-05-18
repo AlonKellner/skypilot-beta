@@ -11,11 +11,10 @@ class LazyImport:
     This is mainly used in two cases:
     1. Heavy 3rd party modules: They can be time-consuming to import
     and not necessary for all `sky` imports, e.g., numpy(700+ms),
-    pendulum(500+ms), cryptography(500+ms), pandas(200+ms), and
-    networkx(100+ms), etc. With this class, we can avoid the
-    unnecessary import time when the module is not used (e.g.,
-    `networkx` should not be imported for `sky status` and `pandas`
-    should not be imported for `sky exec`).
+    cryptography(500+ms), pandas(200+ms), and networkx(100+ms), etc. 
+    With this class, we can avoid the unnecessary import time when 
+    the module is not used (e.g., `networkx` should not be imported 
+    for `sky status` and `pandas` should not be imported for `sky exec`).
 
     2. Cloud modules in cloud adaptors: cloud dependencies are only required
     when a cloud is enabled, so we only import them when actually needed.
