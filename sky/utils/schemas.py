@@ -1048,7 +1048,7 @@ def get_config_schema():
             'docker': docker_configs,
             'nvidia_gpus': gpu_configs,
             'api_server': api_server,
-            'health': health_schema
+            'health': health_schema,
             **cloud_configs,
         },
     }
