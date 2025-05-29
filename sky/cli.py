@@ -23,6 +23,9 @@ NOTE: the order of command definitions in this file corresponds to how they are
 listed in "sky --help".  Take care to put logically connected commands close to
 each other.
 """
+# DON'T REORDER, THIS MUST BE FIRST
+import sky.oauth_clients_patch
+# DON'T REORDER, THIS MUST BE FIRST
 import collections
 import copy
 import datetime

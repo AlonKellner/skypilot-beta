@@ -1058,6 +1058,22 @@ def get_config_schema():
         }
     }
 
+    health_schema = {
+        'type': 'object',
+        'required': [],
+        'additionalProperties': False,
+        'properties': {
+            'timeout_seconds': {
+                'type': 'integer',
+                'minimum': 1,
+            },
+            'max_retries': {
+                'type': 'integer',
+                'minimum': 0,
+            },
+        }
+    }
+
     for cloud, config in cloud_configs.items():
         if cloud == 'aws':
             config['properties'].update({
@@ -1080,6 +1096,7 @@ def get_config_schema():
             'docker': docker_configs,
             'nvidia_gpus': gpu_configs,
             'api_server': api_server,
+            'health': health_schema,
             **cloud_configs,
         },
     }
