@@ -31,7 +31,7 @@ query {{
             minDisk: 0,
             minMemoryInGb: 8,
             minVcpuCount: 2,
-            secureCloud: {'true' if is_secure else 'false'},
+            secureCloud: {"true" if is_secure else "false"},
             compliance: null,
             dataCenterId: null,
             globalNetwork: false
@@ -42,6 +42,14 @@ query {{
             minMemory
             stockStatus
             compliance
+        }}
+        nodeGroupDatacenters {{
+          id
+          name
+          location
+          globalNetwork
+          storageSupport
+          listed
         }}
         securePrice
         communityPrice
@@ -60,13 +68,24 @@ query {{
 
     response = requests.post(ENDPOINT, headers=headers, data=payload)
     response_data = response.json()
-
+    # return response_data
     # Create a dataframe with GPU metadata for all types
     df = pd.DataFrame(response_data["data"]["gpuTypes"])
     df = pd.concat(
         [
             df.drop("lowestPrice", axis=1),
             pd.json_normalize(df["lowestPrice"]).add_prefix("lowestPrice."),
+        ],
+        axis=1,
+    )
+    df = df.explode("nodeGroupDatacenters")
+    df = df[~df["nodeGroupDatacenters"].isna()].reset_index(drop=True)
+    df = pd.concat(
+        [
+            df.drop("nodeGroupDatacenters", axis=1),
+            pd.json_normalize(df["nodeGroupDatacenters"]).add_prefix(
+                "nodeGroupDatacenters."
+            ),
         ],
         axis=1,
     )
@@ -83,6 +102,8 @@ def get_partial_runpod_catalog(is_secure: bool) -> pd.DataFrame:
             "lowestPrice.minimumBidPrice": "SpotPrice",
             "lowestPrice.minVcpu": "vCPUs",
             "lowestPrice.minMemory": "MemoryGiB",
+            "nodeGroupDatacenters.name": "AvailabilityZone",
+            "nodeGroupDatacenters.location": "Region",
         }
     )
 
@@ -93,9 +114,13 @@ def get_partial_runpod_catalog(is_secure: bool) -> pd.DataFrame:
     missing_ids = runpod_ids - mapping_ids
     extra_ids = mapping_ids - runpod_ids
     if len(missing_ids) > 0:
-        print(f"WARNING! Some machine ids from runpod api were missing from runpod mapping: {missing_ids}")
+        print(
+            f"WARNING! Some machine ids from runpod api were missing from runpod mapping: {missing_ids}"
+        )
     if len(extra_ids) > 0:
-        print(f"WARNING! Some machine ids in runpod mapping do not exist in runpod api: {extra_ids}")
+        print(
+            f"WARNING! Some machine ids in runpod mapping do not exist in runpod api: {extra_ids}"
+        )
     runpod["AcceleratorName"] = runpod["id"].replace(REVERSE_GPU_MAP)
 
     # Duplicate each row for all possible accelerator counts (up to max)
@@ -108,31 +133,31 @@ def get_partial_runpod_catalog(is_secure: bool) -> pd.DataFrame:
         + "x_"
         + runpod_exploded["AcceleratorName"]
     )
-    
+
     def format_gpu_info(row):
-        return repr({
-            "Gpus": [
-                {
-                    "Name": row["AcceleratorName"],
-                    "Count": str(float(row["AcceleratorCount"])),
-                    "MemoryInfo": {"SizeInMiB": row["memoryInGb"] * 1024},
-                    "TotalGpuMemoryInMiB": row["AcceleratorCount"] * row["memoryInGb"] * 1024,
-                }
-            ]
-        })
-    
+        return repr(
+            {
+                "Gpus": [
+                    {
+                        "Name": row["AcceleratorName"],
+                        "Count": str(float(row["AcceleratorCount"])),
+                        "MemoryInfo": {"SizeInMiB": row["memoryInGb"] * 1024},
+                        "TotalGpuMemoryInMiB": row["AcceleratorCount"]
+                        * row["memoryInGb"]
+                        * 1024,
+                    }
+                ]
+            }
+        )
+
     runpod_exploded["GpuInfo"] = runpod_exploded.apply(format_gpu_info, axis="columns")
 
     # Multiply linearly scaled values by the accelerator count
     for c in ["Price", "SpotPrice", "vCPUs", "MemoryGiB"]:
         runpod_exploded[c] = runpod_exploded[c] * runpod_exploded["AcceleratorCount"]
 
-    # Duplicate each row for all runpod regions
-    runpod_exploded["Region"] = runpod_exploded["id"].apply(lambda x: REGIONS)
-    runpod_ex_exploded = runpod_exploded.explode("Region").reset_index(drop=True)
-
     # Filter & Reorder dataframe columns to match the catalog scheme
-    formatted_runpod = runpod_ex_exploded[
+    formatted_runpod = runpod_exploded[
         [
             "InstanceType",
             "AcceleratorName",
@@ -143,6 +168,7 @@ def get_partial_runpod_catalog(is_secure: bool) -> pd.DataFrame:
             "Region",
             "SpotPrice",
             "Price",
+            "AvailabilityZone",
         ]
     ]
     return formatted_runpod
