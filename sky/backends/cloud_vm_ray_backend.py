@@ -61,6 +61,7 @@ from sky.utils import cluster_utils
 from sky.utils import command_runner
 from sky.utils import common
 from sky.utils import common_utils
+from sky.utils import context_utils
 from sky.utils import controller_utils
 from sky.utils import env_options
 from sky.utils import log_utils
@@ -274,6 +275,7 @@ class RayCodeGen:
         ray_address = 'auto'
         self._code = [
             textwrap.dedent(f"""\
+            import functools
             import getpass
             import hashlib
             import io
@@ -363,6 +365,7 @@ class RayCodeGen:
             # by ray.remote. This should be removed once we have a better way to
             # specify dependencies for ray.
             inspect.getsource(log_lib._ProcessingArgs),  # pylint: disable=protected-access
+            inspect.getsource(log_lib._get_context),  # pylint: disable=protected-access
             inspect.getsource(log_lib._handle_io_stream),  # pylint: disable=protected-access
             inspect.getsource(log_lib.process_subprocess_stream),
             inspect.getsource(log_lib.run_with_log),
@@ -1355,6 +1358,8 @@ class RetryingVmProvisioner(object):
         # Get previous cluster status
         cluster_exists = prev_cluster_status is not None
 
+        to_provision = to_provision.assert_launchable()
+
         assert to_provision.region is not None, (
             to_provision, 'region should have been set by the optimizer.')
         region = clouds.Region(to_provision.region)
@@ -1581,6 +1586,10 @@ class RetryingVmProvisioner(object):
                     config_dict['handle'] = handle
                     return config_dict
                 except provision_common.StopFailoverError:
+                    with ux_utils.print_exception_no_traceback():
+                        raise
+                except exceptions.InconsistentHighAvailabilityError:
+                    # No teardown happens for this error.
                     with ux_utils.print_exception_no_traceback():
                         raise
                 except Exception as e:  # pylint: disable=broad-except
@@ -2026,12 +2035,14 @@ class RetryingVmProvisioner(object):
                             f' that never expire or a service account.\033[0m')
                 logger.warning(warnings)
 
+        to_provision = to_provision.assert_launchable()
         # Retrying launchable resources.
         while True:
             try:
                 # Recheck cluster name as the 'except:' block below may
                 # change the cloud assignment.
                 common_utils.check_cluster_name_is_valid(cluster_name)
+
                 if dryrun:
                     cloud_user = None
                 else:
@@ -2154,9 +2165,10 @@ class RetryingVmProvisioner(object):
                 raise exceptions.ResourcesUnavailableError(
                     _RESOURCES_UNAVAILABLE_LOG + '\n' + table.get_string(),
                     failover_history=failover_history)
-            to_provision = task.best_resources
+            best_resources = task.best_resources
             assert task in self._dag.tasks, 'Internal logic error.'
-            assert to_provision is not None, task
+            assert best_resources is not None, task
+            to_provision = best_resources
         return config_dict
 
 
@@ -2410,6 +2422,7 @@ class CloudVmRayResourceHandle(backends.backend.ResourceHandle):
             internal_external_ips[1:], key=lambda x: x[1])
         self.stable_internal_external_ips = stable_internal_external_ips
 
+    @context_utils.cancellation_guard
     @annotations.lru_cache(scope='global')
     @timeline.event
     def get_command_runners(self,
@@ -2421,19 +2434,21 @@ class CloudVmRayResourceHandle(backends.backend.ResourceHandle):
             self.cluster_yaml, self.docker_user, self.ssh_user)
         if avoid_ssh_control:
             ssh_credentials.pop('ssh_control_name', None)
+
+        launched_resources = self.launched_resources.assert_launchable()
         updated_to_skypilot_provisioner_after_provisioned = (
-            self.launched_resources.cloud.PROVISIONER_VERSION >=
+            launched_resources.cloud.PROVISIONER_VERSION >=
             clouds.ProvisionerVersion.SKYPILOT and
             self.cached_external_ips is not None and
             self.cached_cluster_info is None)
         if updated_to_skypilot_provisioner_after_provisioned:
             logger.debug(
-                f'{self.launched_resources.cloud} has been updated to the new '
+                f'{launched_resources.cloud} has been updated to the new '
                 f'provisioner after cluster {self.cluster_name} was '
                 f'provisioned. Cached IPs are used for connecting to the '
                 'cluster.')
         if (clouds.ProvisionerVersion.RAY_PROVISIONER_SKYPILOT_TERMINATOR >=
-                self.launched_resources.cloud.PROVISIONER_VERSION or
+                launched_resources.cloud.PROVISIONER_VERSION or
                 updated_to_skypilot_provisioner_after_provisioned):
             ip_list = (self.cached_external_ips
                        if force_cached else self.external_ips())
@@ -2459,6 +2474,7 @@ class CloudVmRayResourceHandle(backends.backend.ResourceHandle):
                     'Tried to use cached cluster info, but it\'s missing for '
                     f'cluster "{self.cluster_name}"')
             self._update_cluster_info()
+
         assert self.cached_cluster_info is not None, self
         runners = provision_lib.get_command_runners(
             self.cached_cluster_info.provider_name, self.cached_cluster_info,
@@ -2689,6 +2705,7 @@ class CloudVmRayBackend(backends.Backend['CloudVmRayResourceHandle']):
             self._optimize_target) or common.OptimizeTarget.COST
         self._requested_features = kwargs.pop('requested_features',
                                               self._requested_features)
+        self._dump_final_script = kwargs.pop('dump_final_script', False)
         assert not kwargs, f'Unexpected kwargs: {kwargs}'
 
     def check_resources_fit_cluster(
@@ -3135,8 +3152,8 @@ class CloudVmRayBackend(backends.Backend['CloudVmRayResourceHandle']):
             resources_utils.port_ranges_to_set(current_ports) -
             resources_utils.port_ranges_to_set(prev_ports))
         if open_new_ports:
-            cloud = handle.launched_resources.cloud
-            if not (cloud.OPEN_PORTS_VERSION <=
+            launched_resources = handle.launched_resources.assert_launchable()
+            if not (launched_resources.cloud.OPEN_PORTS_VERSION <=
                     clouds.OpenPortsVersion.LAUNCH_ONLY):
                 with rich_utils.safe_status(
                         ux_utils.spinner_message(
@@ -3240,9 +3257,10 @@ class CloudVmRayBackend(backends.Backend['CloudVmRayResourceHandle']):
         TODO: Delete COPY storage_mounts in task.sync_storage_mounts(), and
         assert here that all storage_mounts are MOUNT mode.
         """
+        launched_resources = handle.launched_resources.assert_launchable()
         with rich_utils.safe_status(ux_utils.spinner_message('Syncing files')):
             controller_utils.replace_skypilot_config_path_in_file_mounts(
-                handle.launched_resources.cloud, all_file_mounts)
+                launched_resources.cloud, all_file_mounts)
             self._execute_file_mounts(handle, all_file_mounts)
             self._execute_storage_mounts(handle, storage_mounts)
             self._set_storage_mounts_metadata(handle.cluster_name,
@@ -3272,18 +3290,30 @@ class CloudVmRayBackend(backends.Backend['CloudVmRayResourceHandle']):
                                                          env_vars=setup_envs)
             encoded_script = shlex.quote(setup_script)
 
-            def _dump_setup_script(setup_script: str) -> None:
+            def _dump_final_script(
+                    setup_script: str,
+                    target_dir: str = remote_setup_file_name) -> None:
                 with tempfile.NamedTemporaryFile('w', prefix='sky_setup_') as f:
                     f.write(setup_script)
                     f.flush()
                     setup_sh_path = f.name
                     runner.rsync(source=setup_sh_path,
-                                 target=remote_setup_file_name,
+                                 target=target_dir,
                                  up=True,
                                  stream_logs=False)
 
+            # Always dump the full setup script to the persistent path first
+            # In high availability mode, we need to dump the full setup script
+            # to a persistent path BEFORE any other operations. This ensures
+            # that if the pod restarts, it can find and execute the complete
+            # setup script, rather than a reference to a temporary file that
+            # would no longer exist after restart.
+            if self._dump_final_script:
+                _dump_final_script(setup_script,
+                                   constants.PERSISTENT_SETUP_SCRIPT_PATH)
+
             if detach_setup or _is_command_length_over_limit(encoded_script):
-                _dump_setup_script(setup_script)
+                _dump_final_script(setup_script)
                 create_script_code = 'true'
             else:
                 create_script_code = (f'{{ echo {encoded_script} > '
@@ -3335,7 +3365,7 @@ class CloudVmRayBackend(backends.Backend['CloudVmRayResourceHandle']):
                         'Failed to run setup command inline due to '
                         'command length limit. Dumping setup script to '
                         'file and running it with SSH.')
-                    _dump_setup_script(setup_script)
+                    _dump_final_script(setup_script)
                     returncode = _run_setup(setup_cmd)
 
             def error_message() -> str:
@@ -3426,14 +3456,14 @@ class CloudVmRayBackend(backends.Backend['CloudVmRayResourceHandle']):
         code = job_lib.JobLibCodeGen.queue_job(job_id, job_submit_cmd)
         job_submit_cmd = ' && '.join([mkdir_code, create_script_code, code])
 
-        def _dump_code_to_file(codegen: str) -> None:
+        def _dump_code_to_file(codegen: str,
+                               target_dir: str = SKY_REMOTE_APP_DIR) -> None:
             runners = handle.get_command_runners()
             head_runner = runners[0]
             with tempfile.NamedTemporaryFile('w', prefix='sky_app_') as fp:
                 fp.write(codegen)
                 fp.flush()
-                script_path = os.path.join(SKY_REMOTE_APP_DIR,
-                                           f'sky_job_{job_id}')
+                script_path = os.path.join(target_dir, f'sky_job_{job_id}')
                 # We choose to sync code + exec, because the alternative of 'ray
                 # submit' may not work as it may use system python (python2) to
                 # execute the script. Happens for AWS.
@@ -3441,6 +3471,12 @@ class CloudVmRayBackend(backends.Backend['CloudVmRayResourceHandle']):
                                   target=script_path,
                                   up=True,
                                   stream_logs=False)
+
+        # Should also be ealier than _is_command_length_over_limit
+        # Same reason as in _setup
+        if self._dump_final_script:
+            _dump_code_to_file(job_submit_cmd,
+                               constants.PERSISTENT_RUN_SCRIPT_DIR)
 
         if _is_command_length_over_limit(job_submit_cmd):
             _dump_code_to_file(codegen)
@@ -3457,7 +3493,7 @@ class CloudVmRayBackend(backends.Backend['CloudVmRayResourceHandle']):
             # We cannot set the managed job to PENDING state in the job template
             # (jobs-controller.yaml.j2), as it may need to wait for the run
             # commands to be scheduled on the job controller in high-load cases.
-            job_submit_cmd = job_submit_cmd + ' && ' + managed_job_code
+            job_submit_cmd += ' && ' + managed_job_code
 
         returncode, stdout, stderr = self.run_on_head(handle,
                                                       job_submit_cmd,
@@ -3817,6 +3853,7 @@ class CloudVmRayBackend(backends.Backend['CloudVmRayResourceHandle']):
         subprocess_utils.run_in_parallel(_rsync_down, parallel_args)
         return dict(zip(job_ids, local_log_dirs))
 
+    @context_utils.cancellation_guard
     def tail_logs(self,
                   handle: CloudVmRayResourceHandle,
                   job_id: Optional[int],
@@ -4123,7 +4160,8 @@ class CloudVmRayBackend(backends.Backend['CloudVmRayResourceHandle']):
         log_path = os.path.join(os.path.expanduser(self.log_dir),
                                 'teardown.log')
         log_abs_path = os.path.abspath(log_path)
-        cloud = handle.launched_resources.cloud
+        launched_resources = handle.launched_resources.assert_launchable()
+        cloud = launched_resources.cloud
         config = common_utils.read_yaml(handle.cluster_yaml)
         cluster_name = handle.cluster_name
         cluster_name_on_cloud = handle.cluster_name_on_cloud
@@ -4335,10 +4373,12 @@ class CloudVmRayBackend(backends.Backend['CloudVmRayResourceHandle']):
             # the right resource to provision the cluster.
             if handle.cluster_yaml is not None:
                 try:
-                    cloud = handle.launched_resources.cloud
+                    launched_resources = (
+                        handle.launched_resources.assert_launchable())
+                    cloud = launched_resources.cloud
                     config = common_utils.read_yaml(handle.cluster_yaml)
                     cloud.check_features_are_supported(
-                        handle.launched_resources,
+                        launched_resources,
                         {clouds.CloudImplementationFeatures.OPEN_PORTS})
                     provision_lib.cleanup_ports(repr(cloud),
                                                 cluster_name_on_cloud,
@@ -4464,6 +4504,7 @@ class CloudVmRayBackend(backends.Backend['CloudVmRayResourceHandle']):
 
                     # down = False is the default, but warn the user in case
                     # they have explicitly specified it.
+                    # TODO(cooperc): Fix for new autostop stuff.
                     config_override_down = skypilot_config.get_nested(
                         (controller.value.controller_type, 'controller',
                          'autostop', 'down'), None)
@@ -4534,6 +4575,7 @@ class CloudVmRayBackend(backends.Backend['CloudVmRayResourceHandle']):
     # TODO(zhwu): Refactor this to a CommandRunner class, so different backends
     # can support its own command runner.
     @timeline.event
+    @context_utils.cancellation_guard
     def run_on_head(
         self,
         handle: CloudVmRayResourceHandle,
@@ -4632,6 +4674,7 @@ class CloudVmRayBackend(backends.Backend['CloudVmRayResourceHandle']):
             handle_before_refresh = record['handle']
             status_before_refresh = record['status']
 
+        handle: Optional[CloudVmRayResourceHandle]
         prev_cluster_status, handle = (status_before_refresh,
                                        handle_before_refresh)
 
@@ -4652,7 +4695,7 @@ class CloudVmRayBackend(backends.Backend['CloudVmRayResourceHandle']):
                 prev_cluster_status = None
                 handle = None
         # We should check the cluster_ever_up after refresh, because if the
-        # cluster is terminated (through console or auto-dwon), the record will
+        # cluster is terminated (through console or auto-down), the record will
         # become None and the cluster_ever_up should be considered as False.
         cluster_ever_up = record is not None and record['cluster_ever_up']
         prev_config_hash = record['config_hash'] if record is not None else None
@@ -4665,16 +4708,21 @@ class CloudVmRayBackend(backends.Backend['CloudVmRayResourceHandle']):
             self.check_resources_fit_cluster(handle, task)
             # Use the existing cluster.
             assert handle.launched_resources is not None, (cluster_name, handle)
+            # Take a random resource in order to get resource info that applies
+            # to all resources.
+            one_task_resource = list(task.resources)[0]
             # Assume resources share the same ports.
             for resource in task.resources:
-                assert resource.ports == list(task.resources)[0].ports
+                assert resource.ports == one_task_resource.ports
             requested_ports_set = resources_utils.port_ranges_to_set(
-                list(task.resources)[0].ports)
+                one_task_resource.ports)
             current_ports_set = resources_utils.port_ranges_to_set(
                 handle.launched_resources.ports)
             all_ports = resources_utils.port_set_to_ranges(current_ports_set |
                                                            requested_ports_set)
             to_provision = handle.launched_resources
+            assert to_provision is not None
+            to_provision = to_provision.assert_launchable()
             if (to_provision.cloud.OPEN_PORTS_VERSION <=
                     clouds.OpenPortsVersion.LAUNCH_ONLY):
                 if not requested_ports_set <= current_ports_set:
@@ -4688,6 +4736,21 @@ class CloudVmRayBackend(backends.Backend['CloudVmRayResourceHandle']):
                             'a new cluster with the desired ports open.')
             if all_ports:
                 to_provision = to_provision.copy(ports=all_ports)
+            # Docker login should always be the same for all resources, since
+            # it's set from envs.
+            for resource in task.resources:
+                assert (resource.docker_login_config ==
+                        one_task_resource.docker_login_config), (
+                            resource.docker_login_config,
+                            one_task_resource.docker_login_config)
+            # If we have docker login config in the new task, override the
+            # existing resources to pick up new credentials. This allows the
+            # user to specify new or fixed credentials if the existing
+            # credentials are not working. If we don't do this, the credentials
+            # from the existing resources will always be reused.
+            if one_task_resource.docker_login_config is not None:
+                to_provision = to_provision.copy(
+                    _docker_login_config=one_task_resource.docker_login_config)
             return RetryingVmProvisioner.ToProvisionConfig(
                 cluster_name,
                 to_provision,

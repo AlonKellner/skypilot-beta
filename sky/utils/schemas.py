@@ -33,6 +33,37 @@ def _check_not_both_fields_present(field1: str, field2: str):
     }
 
 
+_AUTOSTOP_SCHEMA = {
+    'anyOf': [
+        {
+            # Use boolean to disable autostop completely, e.g.
+            #   autostop: false
+            'type': 'boolean',
+        },
+        {
+            # Shorthand to set idle_minutes by directly specifying, e.g.
+            #   autostop: 5
+            'type': 'integer',
+            'minimum': 0,
+        },
+        {
+            'type': 'object',
+            'required': [],
+            'additionalProperties': False,
+            'properties': {
+                'idle_minutes': {
+                    'type': 'integer',
+                    'minimum': 0,
+                },
+                'down': {
+                    'type': 'boolean',
+                },
+            },
+        },
+    ],
+}
+
+
 def _get_single_resources_schema():
     """Schema for a single resource in a resources list."""
     # To avoid circular imports, only import when needed.
@@ -165,6 +196,7 @@ def _get_single_resources_schema():
                     'type': 'null',
                 }]
             },
+            'autostop': _AUTOSTOP_SCHEMA,
             # The following fields are for internal use only. Should not be
             # specified in the task config.
             '_docker_login_config': {
@@ -725,29 +757,6 @@ def get_config_schema():
         if k != '$schema'
     }
     resources_schema['properties'].pop('ports')
-    autostop_schema = {
-        'anyOf': [
-            {
-                # Use boolean to disable autostop completely, e.g.
-                #   autostop: false
-                'type': 'boolean',
-            },
-            {
-                'type': 'object',
-                'required': [],
-                'additionalProperties': False,
-                'properties': {
-                    'idle_minutes': {
-                        'type': 'integer',
-                        'minimum': 0,
-                    },
-                    'down': {
-                        'type': 'boolean',
-                    },
-                },
-            },
-        ],
-    }
     controller_resources_schema = {
         'type': 'object',
         'required': [],
@@ -759,7 +768,10 @@ def get_config_schema():
                 'additionalProperties': False,
                 'properties': {
                     'resources': resources_schema,
-                    'autostop': autostop_schema,
+                    'high_availability': {
+                        'type': 'boolean',
+                    },
+                    'autostop': _AUTOSTOP_SCHEMA,
                 }
             },
             'bucket': {
@@ -833,6 +845,12 @@ def get_config_schema():
                 },
                 'enable_gvnic': {
                     'type': 'boolean'
+                },
+                'enable_gpu_direct': {
+                    'type': 'boolean'
+                },
+                'placement_policy': {
+                    'type': 'string',
                 },
                 'vpc_name': {
                     'oneOf': [
@@ -920,6 +938,16 @@ def get_config_schema():
                         for type in kubernetes_enums.KubernetesAutoscalerType
                     ]
                 },
+                'high_availability': {
+                    'type': 'object',
+                    'required': [],
+                    'additionalProperties': False,
+                    'properties': {
+                        'storage_class_name': {
+                            'type': 'string',
+                        }
+                    }
+                },
             }
         },
         'oci': {
@@ -950,6 +978,26 @@ def get_config_schema():
                 }
             },
         },
+        'nebius': {
+            'type': 'object',
+            'required': [],
+            'properties': {
+                **_NETWORK_CONFIG_SCHEMA,
+            },
+            'additionalProperties': {
+                'type': 'object',
+                'required': [],
+                'additionalProperties': False,
+                'properties': {
+                    'project_id': {
+                        'type': 'string',
+                    },
+                    'fabric': {
+                        'type': 'string',
+                    },
+                }
+            },
+        }
     }
 
     admin_policy_schema = {

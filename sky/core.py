@@ -369,9 +369,18 @@ def _start(
                 'supported when starting SkyPilot controllers. To '
                 f'fix: omit the {arguments_str} to use the '
                 f'default autostop settings from config.')
-        idle_minutes_to_autostop, down = (
-            controller_utils.get_controller_autostop_config(
-                controller=controller))
+
+        # Get the autostop resources, from which we extract the correct autostop
+        # config.
+        controller_resources = controller_utils.get_controller_resources(
+            controller, [])
+        # All resources should have the same autostop config.
+        controller_autostop_config = list(
+            controller_resources)[0].autostop_config
+        if (controller_autostop_config is not None and
+                controller_autostop_config.enabled):
+            idle_minutes_to_autostop = controller_autostop_config.idle_minutes
+            down = controller_autostop_config.down
 
     usage_lib.record_cluster_name_for_current_operation(cluster_name)
 
@@ -627,29 +636,26 @@ def autostop(
     )
     backend = backend_utils.get_backend_from_handle(handle)
 
+    resources = handle.launched_resources.assert_launchable()
     # Check cloud supports stopping spot instances
-    cloud = handle.launched_resources.cloud
-    assert cloud is not None, handle
+    cloud = resources.cloud
 
     if not isinstance(backend, backends.CloudVmRayBackend):
         raise exceptions.NotSupportedError(
             f'{operation} cluster {cluster_name!r} with backend '
             f'{backend.__class__.__name__!r} is not supported.')
-    cloud = handle.launched_resources.cloud
+
     # Check if autostop/autodown is required and supported
     if not is_cancel:
         try:
             if down:
                 cloud.check_features_are_supported(
-                    handle.launched_resources,
-                    {clouds.CloudImplementationFeatures.AUTODOWN})
+                    resources, {clouds.CloudImplementationFeatures.AUTODOWN})
             else:
                 cloud.check_features_are_supported(
-                    handle.launched_resources,
-                    {clouds.CloudImplementationFeatures.STOP})
+                    resources, {clouds.CloudImplementationFeatures.STOP})
                 cloud.check_features_are_supported(
-                    handle.launched_resources,
-                    {clouds.CloudImplementationFeatures.AUTOSTOP})
+                    resources, {clouds.CloudImplementationFeatures.AUTOSTOP})
         except exceptions.NotSupportedError as e:
             raise exceptions.NotSupportedError(
                 f'{colorama.Fore.YELLOW}{operation} on cluster '
@@ -1012,22 +1018,62 @@ def realtime_kubernetes_gpu_availability(
     context: Optional[str] = None,
     name_filter: Optional[str] = None,
     quantity_filter: Optional[int] = None
-) -> List[models.RealtimeGpuAvailability]:
+) -> List[Tuple[str, List[models.RealtimeGpuAvailability]]]:
 
-    counts, capacity, available = service_catalog.list_accelerator_realtime(
-        gpus_only=True,
-        clouds='kubernetes',
-        name_filter=name_filter,
-        region_filter=context,
-        quantity_filter=quantity_filter,
-        case_sensitive=False)
-    assert (set(counts.keys()) == set(capacity.keys()) == set(
-        available.keys())), (f'Keys of counts ({list(counts.keys())}), '
-                             f'capacity ({list(capacity.keys())}), '
-                             f'and available ({list(available.keys())}) '
-                             'must be same.')
-    if len(counts) == 0:
-        err_msg = 'No GPUs found in Kubernetes cluster. '
+    if context is None:
+        context_list = clouds.Kubernetes.existing_allowed_contexts()
+    else:
+        context_list = [context]
+
+    def _realtime_kubernetes_gpu_availability_single(
+        context: Optional[str] = None,
+        name_filter: Optional[str] = None,
+        quantity_filter: Optional[int] = None
+    ) -> List[models.RealtimeGpuAvailability]:
+        counts, capacity, available = service_catalog.list_accelerator_realtime(
+            gpus_only=True,
+            clouds='kubernetes',
+            name_filter=name_filter,
+            region_filter=context,
+            quantity_filter=quantity_filter,
+            case_sensitive=False)
+        assert (set(counts.keys()) == set(capacity.keys()) == set(
+            available.keys())), (f'Keys of counts ({list(counts.keys())}), '
+                                 f'capacity ({list(capacity.keys())}), '
+                                 f'and available ({list(available.keys())}) '
+                                 'must be the same.')
+        realtime_gpu_availability_list: List[
+            models.RealtimeGpuAvailability] = []
+
+        for gpu, _ in sorted(counts.items()):
+            realtime_gpu_availability_list.append(
+                models.RealtimeGpuAvailability(
+                    gpu,
+                    counts.pop(gpu),
+                    capacity[gpu],
+                    available[gpu],
+                ))
+        return realtime_gpu_availability_list
+
+    availability_lists: List[Tuple[str,
+                                   List[models.RealtimeGpuAvailability]]] = []
+    cumulative_count = 0
+    parallel_queried = subprocess_utils.run_in_parallel(
+        lambda ctx: _realtime_kubernetes_gpu_availability_single(
+            context=ctx,
+            name_filter=name_filter,
+            quantity_filter=quantity_filter), context_list)
+
+    for ctx, queried in zip(context_list, parallel_queried):
+        cumulative_count += len(queried)
+        if len(queried) == 0:
+            # don't add gpu results for clusters that don't have any
+            logger.debug(f'No gpus found in k8s cluster {ctx}')
+            continue
+        availability_lists.append((ctx, queried))
+
+    if cumulative_count == 0:
+        err_msg = 'No GPUs found in any Kubernetes clusters. '
         debug_msg = 'To further debug, run: sky check '
         if name_filter is not None:
             gpu_info_msg = f' {name_filter!r}'
@@ -1035,24 +1081,13 @@ def realtime_kubernetes_gpu_availability(
                 gpu_info_msg += (' with requested quantity'
                                  f' {quantity_filter}')
             err_msg = (f'Resources{gpu_info_msg} not found '
-                       'in Kubernetes cluster. ')
+                       'in Kubernetes clusters. ')
             debug_msg = ('To show available accelerators on kubernetes,'
                          ' run: sky show-gpus --cloud kubernetes ')
         full_err_msg = (err_msg + kubernetes_constants.NO_GPU_HELP_MESSAGE +
                         debug_msg)
         raise ValueError(full_err_msg)
-
-    realtime_gpu_availability_list: List[models.RealtimeGpuAvailability] = []
-
-    for gpu, _ in sorted(counts.items()):
-        realtime_gpu_availability_list.append(
-            models.RealtimeGpuAvailability(
-                gpu,
-                counts.pop(gpu),
-                capacity[gpu],
-                available[gpu],
-            ))
-    return realtime_gpu_availability_list
+    return availability_lists
 
 
 # =================

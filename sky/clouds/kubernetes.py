@@ -414,8 +414,9 @@ class Kubernetes(clouds.Cloud):
             context = region.name
         assert context is not None, 'No context found in kubeconfig'
 
-        r = resources
-        acc_dict = self.get_accelerators_from_instance_type(r.instance_type)
+        resources = resources.assert_launchable()
+        acc_dict = self.get_accelerators_from_instance_type(
+            resources.instance_type)
         custom_resources = resources_utils.make_ray_custom_resources_str(
             acc_dict)
 
@@ -429,38 +430,43 @@ class Kubernetes(clouds.Cloud):
         acc_count = k.accelerator_count if k.accelerator_count else 0
         acc_type = k.accelerator_type if k.accelerator_type else None
 
-        image_id_dict = resources.image_id
-        if image_id_dict is not None:
-            # Use custom image specified in resources
-            if None in image_id_dict:
-                image_id = image_id_dict[None]
+        def _get_image_id(resources: 'resources_lib.Resources') -> str:
+            image_id_dict = resources.image_id
+            if image_id_dict is not None:
+                # Use custom image specified in resources
+                if None in image_id_dict:
+                    image_id = image_id_dict[None]
+                else:
+                    assert resources.region in image_id_dict, image_id_dict
+                    image_id = image_id_dict[resources.region]
+                if image_id.startswith('docker:'):
+                    image_id = image_id[len('docker:'):]
             else:
-                assert resources.region in image_id_dict, image_id_dict
-                image_id = image_id_dict[resources.region]
-            if image_id.startswith('docker:'):
-                image_id = image_id[len('docker:'):]
-        else:
-            # Select image based on whether we are using GPUs or not.
-            image_id = self.IMAGE_GPU if acc_count > 0 else self.IMAGE_CPU
-            # Get the container image ID from the service catalog.
-            image_id = service_catalog.get_image_id_from_tag(
-                image_id, clouds='kubernetes')
+                # Select image based on whether we are using GPUs or not.
+                image_id = self.IMAGE_GPU if acc_count > 0 else self.IMAGE_CPU
+                # Get the container image ID from the service catalog.
+                image_id = service_catalog.get_image_id_from_tag(
+                    image_id, clouds='kubernetes')
+            return image_id
+
+        image_id = _get_image_id(resources)
         # TODO(romilb): Create a lightweight image for SSH jump host
         ssh_jump_image = service_catalog.get_image_id_from_tag(
             self.IMAGE_CPU, clouds='kubernetes')
 
         k8s_acc_label_key = None
-        k8s_acc_label_value = None
+        k8s_acc_label_values = None
         k8s_topology_label_key = None
         k8s_topology_label_value = None
         k8s_resource_key = None
         tpu_requested = False
+        avoid_label_keys = None
 
         # If GPU/TPUs are requested, set node label to match the GPU/TPU type.
         if acc_count > 0 and acc_type is not None:
-            (k8s_acc_label_key, k8s_acc_label_value, k8s_topology_label_key,
+            (k8s_acc_label_key, k8s_acc_label_values, k8s_topology_label_key,
              k8s_topology_label_value) = (
-                 kubernetes_utils.get_accelerator_label_key_value(
+                 kubernetes_utils.get_accelerator_label_key_values(
                      context, acc_type, acc_count))
             if (k8s_acc_label_key ==
                     kubernetes_utils.GKELabelFormatter.TPU_LABEL_KEY):
@@ -468,7 +474,11 @@ class Kubernetes(clouds.Cloud):
                 k8s_resource_key = kubernetes_utils.TPU_RESOURCE_KEY
             else:
                 k8s_resource_key = kubernetes_utils.get_gpu_resource_key()
-
+        else:
+            avoid_label_keys = kubernetes_utils.get_accelerator_label_keys(
+                context)
+            if len(avoid_label_keys) == 0:
+                avoid_label_keys = None
         port_mode = network_utils.get_port_mode(None)
 
         remote_identity = skypilot_config.get_nested(
@@ -540,6 +550,13 @@ class Kubernetes(clouds.Cloud):
             # cpus is <1.
             'num-cpus': str(max(int(cpus), 1)),
         }
+
+        # Get the storage class name for high availability controller's PVC
+        k8s_ha_storage_class_name = skypilot_config.get_nested(
+            ('kubernetes', 'high_availability', 'storage_class_name'),
+            None,
+            override_configs=resources.cluster_config_overrides)
+
         deploy_vars = {
             'instance_type': resources.instance_type,
             'custom_resources': custom_resources,
@@ -551,7 +568,7 @@ class Kubernetes(clouds.Cloud):
             'k8s_networking_mode': network_utils.get_networking_mode().value,
             'k8s_ssh_key_secret_name': self.SKY_SSH_KEY_SECRET_NAME,
             'k8s_acc_label_key': k8s_acc_label_key,
-            'k8s_acc_label_value': k8s_acc_label_value,
+            'k8s_acc_label_values': k8s_acc_label_values,
             'k8s_ssh_jump_name': self.SKY_SSH_JUMP_NAME,
             'k8s_ssh_jump_image': ssh_jump_image,
             'k8s_service_account_name': k8s_service_account_name,
@@ -574,6 +591,19 @@ class Kubernetes(clouds.Cloud):
             'skypilot_ray_port': constants.SKY_REMOTE_RAY_PORT,
             'ray_worker_start_command': instance_setup.ray_worker_start_command(
                 custom_resources, custom_ray_options, no_restart=False),
+            'k8s_high_availability_deployment_volume_mount_name':
+                (kubernetes_utils.HIGH_AVAILABILITY_DEPLOYMENT_VOLUME_MOUNT_NAME
+                ),
+            'k8s_high_availability_deployment_volume_mount_path':
+                (kubernetes_utils.HIGH_AVAILABILITY_DEPLOYMENT_VOLUME_MOUNT_PATH
+                ),
+            'k8s_high_availability_deployment_setup_script_path':
+                (constants.PERSISTENT_SETUP_SCRIPT_PATH),
+            'k8s_high_availability_deployment_run_script_dir':
+                (constants.PERSISTENT_RUN_SCRIPT_DIR),
+            'k8s_high_availability_storage_class_name':
+                (k8s_ha_storage_class_name),
+            'avoid_label_keys': avoid_label_keys,
         }
 
         # Add kubecontext if it is set. It may be None if SkyPilot is running

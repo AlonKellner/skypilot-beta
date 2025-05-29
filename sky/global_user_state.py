@@ -19,6 +19,7 @@ import uuid
 from sky import models
 from sky import sky_logging
 from sky.utils import common_utils
+from sky.utils import context_utils
 from sky.utils import db_utils
 from sky.utils import registry
 from sky.utils import status_lib
@@ -429,6 +430,7 @@ def remove_cluster(cluster_name: str, terminate: bool) -> None:
         # Must invalidate IP list to avoid directly trying to ssh into a
         # stopped VM, which leads to timeout.
         if hasattr(handle, 'stable_internal_external_ips'):
+            handle = typing.cast('backends.CloudVmRayResourceHandle', handle)
             handle.stable_internal_external_ips = None
         current_time = int(time.time())
         _DB.cursor.execute(
@@ -670,6 +672,7 @@ def _load_storage_mounts_metadata(
     return pickle.loads(record_storage_mounts_metadata)
 
 
+@context_utils.cancellation_guard
 def get_cluster_from_name(
         cluster_name: Optional[str]) -> Optional[Dict[str, Any]]:
     rows = _DB.cursor.execute(

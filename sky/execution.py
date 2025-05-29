@@ -208,19 +208,62 @@ def _execute(
     # Requested features that some clouds support and others don't.
     requested_features = set()
 
-    if controller_utils.Controllers.from_name(cluster_name) is not None:
+    is_controller_high_availability_supported = False
+
+    controller = controller_utils.Controllers.from_name(cluster_name)
+    if controller is not None:
         requested_features.add(
             clouds.CloudImplementationFeatures.HOST_CONTROLLERS)
+        if controller_utils.high_availability_specified(cluster_name,
+                                                        skip_warning=False):
+            requested_features.add(clouds.CloudImplementationFeatures.
+                                   HIGH_AVAILABILITY_CONTROLLERS)
+            # If we provision a cluster that supports high availability
+            # controllers, we can use the high availability controller.
+            is_controller_high_availability_supported = True
 
     # Add requested features from the task
     requested_features |= task.get_required_cloud_features()
 
     backend = backend if backend is not None else backends.CloudVmRayBackend()
+    # Figure out autostop config.
+    # Note: Ideally this can happen after provisioning, so we can check the
+    # autostop config from the launched resources. Before provisioning,
+    # we aren't sure which resources will be launched, and different
+    # resources may have different autostop configs.
     if isinstance(backend, backends.CloudVmRayBackend):
         if down and idle_minutes_to_autostop is None:
             # Use auto{stop,down} to terminate the cluster after the task is
             # done.
             idle_minutes_to_autostop = 0
+        elif not down and idle_minutes_to_autostop is None:
+            # No autostop config specified on command line, use the
+            # config from resources.
+            # TODO(cooperc): This should be done after provisioning, in order to
+            # support different autostop configs for different resources.
+            # Blockers:
+            # - Need autostop config to set requested_features before
+            #   provisioning.
+            # - Need to send info message about idle_minutes_to_autostop==0 here
+            # - Need to check if autostop is supported by the backend.
+            resources = list(task.resources)
+            for resource in resources:
+                if resource.autostop_config != resources[0].autostop_config:
+                    raise ValueError(
+                        'All resources must have the same autostop config.')
+            resource_autostop_config = resources[0].autostop_config
+
+            if resource_autostop_config is not None:
+                if resource_autostop_config.enabled:
+                    idle_minutes_to_autostop = (
+                        resource_autostop_config.idle_minutes)
+                    down = resource_autostop_config.down
+                else:
+                    # Autostop is explicitly disabled, so cancel it if it's
+                    # already set.
+                    assert not resource_autostop_config.enabled
+                    idle_minutes_to_autostop = -1
+                    down = False
         if idle_minutes_to_autostop is not None:
             if idle_minutes_to_autostop == 0:
                 # idle_minutes_to_autostop=0 can cause the following problem:
@@ -295,9 +338,14 @@ def _execute(
                     task = dag.tasks[0]  # Keep: dag may have been deep-copied.
                     assert task.best_resources is not None, task
 
-    backend.register_info(dag=dag,
-                          optimize_target=optimize_target,
-                          requested_features=requested_features)
+    backend.register_info(
+        dag=dag,
+        optimize_target=optimize_target,
+        requested_features=requested_features,
+        # That's because we want to do commands in task.setup and task.run again
+        # after K8S pod recovers from a crash.
+        # See `kubernetes-ray.yml.j2` for more details.
+        dump_final_script=is_controller_high_availability_supported)
 
     if task.storage_mounts is not None:
         # Optimizer should eventually choose where to store bucket
@@ -627,7 +675,7 @@ def exec(  # pylint: disable=redefined-builtin
         if dryrun.
     """
     entrypoint = task
-    entrypoint.validate(workdir_only=True)
+    entrypoint.validate(skip_file_mounts=True)
     controller_utils.check_cluster_name_not_controller(cluster_name,
                                                        operation_str='sky.exec')
 

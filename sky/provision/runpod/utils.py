@@ -264,8 +264,9 @@ def _create_template_for_docker_login(
 
 
 def launch(cluster_name: str, node_type: str, instance_type: str, region: str,
-           disk_size: int, image_name: str, ports: Optional[List[int]],
-           public_key: str, preemptible: Optional[bool], bid_per_gpu: float,
+           zone: str, disk_size: int, image_name: str,
+           ports: Optional[List[int]], public_key: str,
+           preemptible: Optional[bool], bid_per_gpu: float,
            docker_login_config: Optional[Dict[str, str]]) -> str:
     """Launches an instance with the given parameters.
 
@@ -303,6 +304,9 @@ def launch(cluster_name: str, node_type: str, instance_type: str, region: str,
         f'$(prefix_cmd) echo "{public_key}" >> ~/.ssh/authorized_keys; '
         '$(prefix_cmd) chmod 644 ~/.ssh/authorized_keys; '
         '$(prefix_cmd) service ssh restart; '
+        '$(prefix_cmd) export -p > ~/container_env_var.sh && '
+        '$(prefix_cmd) '
+        'mv ~/container_env_var.sh /etc/profile.d/container_env_var.sh; '
         '[ $(id -u) -eq 0 ] && echo alias sudo="" >> ~/.bashrc;sleep infinity')
     # Use base64 to deal with the tricky quoting issues caused by runpod API.
     encoded = base64.b64encode(setup_cmd.encode('utf-8')).decode('utf-8')
@@ -332,6 +336,7 @@ def launch(cluster_name: str, node_type: str, instance_type: str, region: str,
         'min_memory_in_gb': gpu_specs['memoryInGb'] * gpu_quantity,
         'gpu_count': gpu_quantity,
         'country_code': region,
+        'data_center_id': zone,
         'ports': ports_str,
         'support_public_ip': True,
         'docker_args': docker_args,

@@ -13,6 +13,7 @@ import sys
 import time
 import typing
 from typing import Any, Dict, Optional
+from urllib import parse
 import uuid
 
 import colorama
@@ -152,6 +153,23 @@ def get_server_url(host: Optional[str] = None) -> str:
 
 
 @annotations.lru_cache(scope='global')
+def get_dashboard_url(server_url: str) -> str:
+    # The server_url may include username or password with the
+    # format of https://username:password@example.com:8080/path
+    # We need to remove the username and password and only
+    # return `https://example.com:8080/path`
+    parsed = parse.urlparse(server_url)
+    # Reconstruct the URL without credentials but keeping the scheme
+    dashboard_url = f'{parsed.scheme}://{parsed.hostname}'
+    if parsed.port:
+        dashboard_url = f'{dashboard_url}:{parsed.port}'
+    if parsed.path:
+        dashboard_url = f'{dashboard_url}{parsed.path}'
+    dashboard_url = dashboard_url.rstrip('/')
+    return f'{dashboard_url}/dashboard'
+
+
+@annotations.lru_cache(scope='global')
 def is_api_server_local():
     return get_server_url() in AVAILABLE_LOCAL_API_SERVER_URLS
 
@@ -230,7 +248,9 @@ def handle_request_error(response: 'requests.Response') -> None:
 
 def get_request_id(response: 'requests.Response') -> RequestId:
     handle_request_error(response)
-    request_id = response.headers.get('X-Request-ID')
+    request_id = response.headers.get('X-Skypilot-Request-ID')
+    if request_id is None:
+        request_id = response.headers.get('X-Request-ID')
     if request_id is None:
         with ux_utils.print_exception_no_traceback():
             raise RuntimeError(
@@ -317,8 +337,9 @@ def _start_api_server(deploy: bool = False,
             else:
                 break
 
-        dashboard_msg = (f'Dashboard: {get_server_url(host)}/dashboard')
-        api_server_info = get_api_server_status(get_server_url(host))
+        server_url = get_server_url(host)
+        dashboard_msg = ''
+        api_server_info = get_api_server_status(server_url)
         if api_server_info.version == _DEV_VERSION:
             dashboard_msg += (
                 f'\n{colorama.Style.RESET_ALL}{ux_utils.INDENT_SYMBOL}'
@@ -326,11 +347,16 @@ def _start_api_server(deploy: bool = False,
             if not os.path.isdir(server_constants.DASHBOARD_DIR):
                 dashboard_msg += (
                     'Dashboard is not built, '
-                    'to build: npm --prefix sky/dashboard run build')
+                    'to build: npm --prefix sky/dashboard install '
+                    '&& npm --prefix sky/dashboard run build\n')
             else:
                 dashboard_msg += (
                     'Dashboard may be stale when installed from source, '
-                    'to rebuild: npm --prefix sky/dashboard run build')
+                    'to rebuild: npm --prefix sky/dashboard install '
+                    '&& npm --prefix sky/dashboard run build\n')
+            dashboard_msg += (
+                f'{ux_utils.INDENT_LAST_SYMBOL}{colorama.Fore.GREEN}'
+                f'Dashboard: {get_dashboard_url(server_url)}')
             dashboard_msg += f'{colorama.Style.RESET_ALL}'
         logger.info(
             ux_utils.finishing_message(

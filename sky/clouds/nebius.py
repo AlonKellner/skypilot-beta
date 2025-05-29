@@ -1,12 +1,12 @@
 """ Nebius Cloud. """
-import logging
 import os
 import typing
-from typing import Dict, Iterator, List, Optional, Tuple, Union
+from typing import Any, Dict, Iterator, List, Optional, Tuple, Union
 
 from sky import clouds
 from sky.adaptors import nebius
 from sky.clouds import service_catalog
+from sky.utils import annotations
 from sky.utils import registry
 from sky.utils import resources_utils
 
@@ -17,7 +17,6 @@ _CREDENTIAL_FILES = [
     # credential files for Nebius
     nebius.NEBIUS_TENANT_ID_FILENAME,
     nebius.NEBIUS_IAM_TOKEN_FILENAME,
-    nebius.NEBIUS_PROJECT_ID_FILENAME,
     nebius.NEBIUS_CREDENTIALS_FILENAME
 ]
 
@@ -59,12 +58,10 @@ class Nebius(clouds.Cloud):
             ('Spot is not supported, as Nebius API does not implement spot.'),
         clouds.CloudImplementationFeatures.CLONE_DISK_FROM_CLUSTER:
             (f'Migrating disk is currently not supported on {_REPR}.'),
-        clouds.CloudImplementationFeatures.DOCKER_IMAGE:
-            (f'Docker image is currently not supported on {_REPR}. '
-             'You can try running docker command inside the '
-             '`run` section in task.yaml.'),
         clouds.CloudImplementationFeatures.CUSTOM_DISK_TIER:
             (f'Custom disk tier is currently not supported on {_REPR}.'),
+        clouds.CloudImplementationFeatures.HIGH_AVAILABILITY_CONTROLLERS:
+            ('High availability controllers are not supported on Nebius.'),
     }
     # Nebius maximum instance name length defined as <= 63 as a hostname length
     # 63 - 8 - 5 = 50 characters since
@@ -194,12 +191,13 @@ class Nebius(clouds.Cloud):
             region: 'clouds.Region',
             zones: Optional[List['clouds.Zone']],
             num_nodes: int,
-            dryrun: bool = False) -> Dict[str, Optional[str]]:
+            dryrun: bool = False) -> Dict[str, Any]:
         del dryrun, cluster_name
         assert zones is None, ('Nebius does not support zones', zones)
 
-        r = resources
-        acc_dict = self.get_accelerators_from_instance_type(r.instance_type)
+        resources = resources.assert_launchable()
+        acc_dict = self.get_accelerators_from_instance_type(
+            resources.instance_type)
         custom_resources = resources_utils.make_ray_custom_resources_str(
             acc_dict)
         platform, _ = resources.instance_type.split('_')
@@ -211,7 +209,8 @@ class Nebius(clouds.Cloud):
         else:
             raise RuntimeError('Unsupported instance type for Nebius cloud:'
                                f' {resources.instance_type}')
-        return {
+
+        resources_vars: Dict[str, Any] = {
             'instance_type': resources.instance_type,
             'custom_resources': custom_resources,
             'region': region.name,
@@ -219,6 +218,14 @@ class Nebius(clouds.Cloud):
             # Nebius does not support specific zones.
             'zones': None,
         }
+
+        if acc_dict is not None:
+            # Nebius cloud's docker runtime information does not contain
+            # 'nvidia-container-runtime', causing no GPU option to be added to
+            # the docker run command. We patch this by adding it here.
+            resources_vars['docker_run_options'] = ['--gpus all']
+
+        return resources_vars
 
     def _get_feasible_launchable_resources(
         self, resources: 'resources_lib.Resources'
@@ -275,16 +282,16 @@ class Nebius(clouds.Cloud):
                                                  fuzzy_candidate_list, None)
 
     @classmethod
+    @annotations.lru_cache(scope='request')
     def _check_compute_credentials(cls) -> Tuple[bool, Optional[str]]:
         """Checks if the user has access credentials to
         Nebius's compute service."""
-        logging.debug('Nebius cloud check credentials')
         token_cred_msg = (
             f'{_INDENT_PREFIX}Credentials can be set up by running: \n'
             f'{_INDENT_PREFIX}  $ nebius iam get-access-token > {nebius.NEBIUS_IAM_TOKEN_PATH} \n'  # pylint: disable=line-too-long
-            f'{_INDENT_PREFIX} or generate  ~/.nebius/credentials.json')
+            f'{_INDENT_PREFIX} or generate  ~/.nebius/credentials.json \n')
 
-        tenant_msg = (f'{_INDENT_PREFIX}Copy your tenat ID from the web console and save it to file \n'  # pylint: disable=line-too-long
+        tenant_msg = (f'{_INDENT_PREFIX} Copy your tenat ID from the web console and save it to file \n'  # pylint: disable=line-too-long
                       f'{_INDENT_PREFIX}  $ echo $NEBIUS_TENANT_ID_PATH > {nebius.NEBIUS_TENANT_ID_PATH} \n'  # pylint: disable=line-too-long
                       f'{_INDENT_PREFIX} Or if you have 1 tenant you can run:\n'  # pylint: disable=line-too-long
                       f'{_INDENT_PREFIX}  $ nebius --format json iam whoami|jq -r \'.user_profile.tenants[0].tenant_id\' > {nebius.NEBIUS_TENANT_ID_PATH} \n')  # pylint: disable=line-too-long
@@ -301,11 +308,12 @@ class Nebius(clouds.Cloud):
         except nebius.request_error() as e:
             return False, (
                 f'{e.status} \n'  # First line is indented by 4 spaces
-                f'{token_cred_msg}'
+                f'{token_cred_msg} \n'
                 f'{tenant_msg}')
         return True, None
 
     @classmethod
+    @annotations.lru_cache(scope='request')
     def _check_storage_credentials(cls) -> Tuple[bool, Optional[str]]:
         """Checks if the user has access credentials to Nebius Object Storage.
 
@@ -336,8 +344,9 @@ class Nebius(clouds.Cloud):
             f'~/.nebius/{filename}': f'~/.nebius/{filename}'
             for filename in _CREDENTIAL_FILES
         }
-        credential_file_mounts['~/.aws/credentials'] = '~/.aws/credentials'
-        credential_file_mounts['~/.aws/config'] = '~/.aws/config'
+        if nebius_profile_in_aws_cred_and_config():
+            credential_file_mounts['~/.aws/credentials'] = '~/.aws/credentials'
+            credential_file_mounts['~/.aws/config'] = '~/.aws/config'
         return credential_file_mounts
 
     @classmethod

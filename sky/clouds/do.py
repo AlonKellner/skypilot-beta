@@ -33,6 +33,9 @@ class DO(clouds.Cloud):
         clouds.CloudImplementationFeatures.CUSTOM_DISK_TIER:
             'Custom disk tiers'
             f' is not supported in {_REPR}.',
+        clouds.CloudImplementationFeatures.HIGH_AVAILABILITY_CONTROLLERS:
+            ('High availability controllers are not supported in '
+             f'{_REPR}.'),
     }
     # DO maximum node name length defined as <= 255
     # https://docs.digitalocean.com/reference/api/api-reference/#operation/droplets_create
@@ -178,8 +181,9 @@ class DO(clouds.Cloud):
             dryrun: bool = False) -> Dict[str, Optional[str]]:
         del zones, dryrun, cluster_name
 
-        r = resources
-        acc_dict = self.get_accelerators_from_instance_type(r.instance_type)
+        resources = resources.assert_launchable()
+        acc_dict = self.get_accelerators_from_instance_type(
+            resources.instance_type)
         if acc_dict is not None:
             custom_resources = json.dumps(acc_dict, separators=(',', ':'))
         else:
