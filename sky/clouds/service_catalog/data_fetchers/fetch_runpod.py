@@ -11,7 +11,32 @@ from sky.provision.runpod.utils import GPU_NAME_MAP
 from sky.clouds.service_catalog.constants import CATALOG_DIR, CATALOG_SCHEMA_VERSION
 
 
-REGIONS = ["CA", "CZ", "IS", "NL", "NO", "RO", "SE", "US"]
+REGIONS = {
+    "CA-MTL-1": "CA",
+    "CA-MTL-2": "CA",
+    "CA-MTL-3": "CA",
+    "EU-CZ-1": "CZ",
+    "EU-NL-1": "NL",
+    "EU-RO-1": "RO",
+    "EU-SE-1": "NO",
+    "EUR-IS-1": "IS",
+    "EUR-IS-2": "IS",
+    "EUR-IS-3": "IS",
+    "US-CA-1": "US",
+    "US-CA-2": "US",
+    "US-DE-1": "US",
+    "US-GA-1": "US",
+    "US-GA-2": "US",
+    "US-IL-1": "US",
+    "US-KS-1": "US",
+    "US-KS-2": "US",
+    "US-NC-1": "US",
+    "US-TX-1": "US",
+    "US-TX-2": "US",
+    "US-TX-3": "US",
+    "US-TX-4": "US",
+    "US-WA-1": "US",
+}
 ENDPOINT = "https://api.runpod.io/graphql"
 
 
@@ -103,9 +128,9 @@ def get_partial_runpod_catalog(is_secure: bool) -> pd.DataFrame:
             "lowestPrice.minVcpu": "vCPUs",
             "lowestPrice.minMemory": "MemoryGiB",
             "nodeGroupDatacenters.name": "AvailabilityZone",
-            "nodeGroupDatacenters.location": "Region",
         }
     )
+    runpod["Region"] = runpod["AvailabilityZone"].replace(REGIONS)
 
     # Convert runpod ids to skypilot accelerator names
     REVERSE_GPU_MAP = {v: k for k, v in GPU_NAME_MAP.items()}
