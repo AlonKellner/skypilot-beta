@@ -193,7 +193,6 @@ def get_partial_runpod_catalog(is_secure: bool) -> pd.DataFrame:
             "Region",
             "SpotPrice",
             "Price",
-            "AvailabilityZone",
         ]
     ]
     return formatted_runpod
