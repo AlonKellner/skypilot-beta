@@ -71,6 +71,9 @@ GPU_NAME_MAP = {
     'V100-16GB-SXM2': 'Tesla V100-SXM2-16GB',
     'V100-32GB-SXM2': 'Tesla V100-SXM2-32GB',
     'V100-16GB-PCIe': 'Tesla V100-PCIE-16GB',
+
+    # RTX Blackwell
+    'RTX6000-BLACKWELL': 'NVIDIA RTX PRO 6000 Blackwell Workstation Edition',
 }
 
 

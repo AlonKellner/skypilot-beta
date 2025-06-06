@@ -161,9 +161,9 @@ def get_partial_runpod_catalog(is_secure: bool) -> pd.DataFrame:
         runpod_exploded[c] = runpod_exploded[c] * runpod_exploded["AcceleratorCount"]
 
     # Map region names to their codes
-    runpod_exploded["Region"] = runpod_exploded.apply(lambda x: REGIONS)
+    runpod_exploded["Region"] = runpod_exploded["id"].apply(lambda x: REGIONS)
 
-    runpod_exploded = runpod_exploded.explode("Region")
+    runpod_exploded = runpod_exploded.explode("Region").reset_index(drop=True)
     # Filter & Reorder dataframe columns to match the catalog scheme
     formatted_runpod = runpod_exploded[
         [
