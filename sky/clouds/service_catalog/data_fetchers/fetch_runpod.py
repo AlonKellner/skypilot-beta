@@ -157,7 +157,7 @@ query {{
 def get_partial_runpod_catalog(is_secure: bool) -> pd.DataFrame:
     # Get basic runpod machine details
     raw_runpod = get_raw_runpod_prices(is_secure=is_secure)
-    runpod = raw_runpod[raw_runpod["id"] != "unknown"].copy()
+    runpod = raw_runpod[raw_runpod["id.gpu"] != "unknown"].copy()
     runpod = runpod.rename(
         columns={
             "lowestPrice.uninterruptablePrice": "Price",
@@ -171,7 +171,7 @@ def get_partial_runpod_catalog(is_secure: bool) -> pd.DataFrame:
 
     # Convert runpod ids to skypilot accelerator names
     REVERSE_GPU_MAP = {v: k for k, v in GPU_NAME_MAP.items()}
-    runpod_ids = set(runpod["id"].unique())
+    runpod_ids = set(runpod["id.gpu"].unique())
     mapping_ids = set(REVERSE_GPU_MAP.keys())
     missing_ids = runpod_ids - mapping_ids
     extra_ids = mapping_ids - runpod_ids
@@ -183,7 +183,7 @@ def get_partial_runpod_catalog(is_secure: bool) -> pd.DataFrame:
         print(
             f"WARNING! Some machine ids in GPU_NAME_MAP do not exist in RunPod API: {extra_ids}"
         )
-    runpod["AcceleratorName"] = runpod["id"].replace(REVERSE_GPU_MAP)
+    runpod["AcceleratorName"] = runpod["id.gpu"].replace(REVERSE_GPU_MAP)
 
     # Duplicate each row for all possible accelerator counts (up to max)
     runpod["AcceleratorCount"] = runpod["maxGpuCount"].apply(
