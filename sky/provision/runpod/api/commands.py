@@ -18,8 +18,13 @@ Example:
 """
 from typing import List, Optional
 
+from sky import sky_logging
 from sky.adaptors import runpod
 from sky.provision.runpod.api.pods import generate_spot_pod_deployment_mutation
+
+
+logger = sky_logging.init_logger(__name__)
+
 
 _INTERRUPTABLE_POD_FIELD: str = 'podRentInterruptable'
 _RESPONSE_DATA_FIELD: str = 'data'
@@ -115,6 +120,6 @@ def create_spot_pod(
         template_id=template_id,
         volume_key=volume_key,
     )
-    print(mutation)
+    logger.debug(f"Full spot mutation: \n{mutation}")
     response = runpod.runpod.api.graphql.run_graphql_query(mutation)
     return response[_RESPONSE_DATA_FIELD][_INTERRUPTABLE_POD_FIELD]
