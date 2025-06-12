@@ -157,7 +157,7 @@ query {{
 def get_partial_runpod_catalog(is_secure: bool) -> pd.DataFrame:
     # Get basic runpod machine details
     raw_runpod = get_raw_runpod_prices(is_secure=is_secure)
-    runpod = raw_runpod[raw_runpod["id.gpu"] != "unknown"].copy()
+    runpod = raw_runpod[(raw_runpod["id.gpu"] != "unknown") & (~raw_runpod["id.gpu"].isna())].copy()
     runpod = runpod.rename(
         columns={
             "lowestPrice.uninterruptablePrice": "Price",
@@ -187,7 +187,7 @@ def get_partial_runpod_catalog(is_secure: bool) -> pd.DataFrame:
 
     # Duplicate each row for all possible accelerator counts (up to max)
     runpod["AcceleratorCount"] = runpod["maxGpuCount"].apply(
-        lambda x: [i + 1 for i in range(x)]
+        lambda x: [i + 1 for i in range(int(x))]
     )
     runpod_exploded = runpod.explode("AcceleratorCount").reset_index(drop=True)
     runpod_exploded["InstanceType"] = (
