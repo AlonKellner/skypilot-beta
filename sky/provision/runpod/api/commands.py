@@ -115,5 +115,6 @@ def create_spot_pod(
         template_id=template_id,
         volume_key=volume_key,
     )
+    print(mutation)
     response = runpod.runpod.api.graphql.run_graphql_query(mutation)
     return response[_RESPONSE_DATA_FIELD][_INTERRUPTABLE_POD_FIELD]
