@@ -518,7 +518,7 @@ available_node_types:
                 {{ conda_installation_commands }}
                 {{ ray_installation_commands }}
 
-                VIRTUAL_ENV=~/skypilot-runtime ~/.local/bin/uv pip install "${SKYPILOT_VERSION}"
+                VIRTUAL_ENV=~/skypilot-runtime ~/.local/bin/uv pip install "skypilot[kubernetes,remote]${SKYPILOT_VERSION}"
                 touch /tmp/ray_skypilot_installation_complete
                 echo "=== Ray and skypilot installation completed ==="
 

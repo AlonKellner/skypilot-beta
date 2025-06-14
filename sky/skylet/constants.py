@@ -247,8 +247,8 @@ SKYPILOT_WHEEL_INSTALLATION_COMMANDS = (
     f'{SKY_UV_PIP_CMD} install --prerelease=allow "{dependencies.AZURE_CLI}";'
     'fi;'
     # Install skypilot from wheel
-    f'{SKY_UV_PIP_CMD} install "${{SKYPILOT_VERSION}}[{{cloud}}, remote]" && '
-    'echo "{sky_wheel_hash}" > ~/.sky/wheels/current_sky_wheel_hash || '
+    f'{SKY_UV_PIP_CMD} install "skypilot[{{cloud}},remote]${{SKYPILOT_VERSION}}" && '
+    'echo "${{SKYPILOT_VERSION}}" > ~/.sky/wheels/current_sky_version || '
     'exit 1; }; ')
 
 # Install ray and skypilot on the remote cluster if they are not already

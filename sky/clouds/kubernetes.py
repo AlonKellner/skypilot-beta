@@ -610,12 +610,12 @@ class Kubernetes(clouds.Cloud):
             )
 
         nightly_versions = [
-            ("skypilot-nightly[kubernetes,remote]" + line.removeprefix("skypilot-nightly").split("]")[-1])
+            line.removeprefix("skypilot-nightly").split("]")[-1]
             for line in skypilot_freeze_lines
             if line.startswith("skypilot-nightly")
         ]
         non_nightly_versions = [
-            ("skypilot[kubernetes,remote]" + line.removeprefix("skypilot").split("]")[-1])
+            line.removeprefix("skypilot").split("]")[-1]
             for line in skypilot_freeze_lines
             if not line.startswith("skypilot-nightly")
         ]
