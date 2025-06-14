@@ -373,6 +373,8 @@ available_node_types:
             - name: FUSERMOUNT_SHARED_DIR
               value: {{k8s_fusermount_shared_dir}}
             {% endif %}
+            - name: SKYPILOT_VERSION
+              value: {{skypilot_version}}
           # Do not change this command - it keeps the pod alive until it is
           # explicitly killed.
           command: ["/bin/bash", "-c", "--"]
@@ -516,7 +518,7 @@ available_node_types:
                 {{ conda_installation_commands }}
                 {{ ray_installation_commands }}
 
-                VIRTUAL_ENV=~/skypilot-runtime ~/.local/bin/uv pip install skypilot[kubernetes,remote]
+                VIRTUAL_ENV=~/skypilot-runtime ~/.local/bin/uv pip install "${SKYPILOT_VERSION}"
                 touch /tmp/ray_skypilot_installation_complete
                 echo "=== Ray and skypilot installation completed ==="
 
