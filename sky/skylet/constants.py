@@ -235,6 +235,8 @@ RAY_INSTALLATION_COMMANDS = (
 
 SKYPILOT_WHEEL_INSTALLATION_COMMANDS = (
     f'{SKY_UV_INSTALL_CMD};'
+    f'{{ {SKY_UV_PIP_CMD} list | grep "skypilot " && '
+    '[ "$(cat ~/.sky/wheels/current_sky_wheel_hash)" == "{sky_wheel_hash}" ]; } || '  # pylint: disable=line-too-long
     f'{{ {SKY_UV_PIP_CMD} uninstall skypilot; '
     # uv cannot install azure-cli normally, since it depends on pre-release
     # packages. Manually install azure-cli with the --prerelease=allow flag
@@ -248,7 +250,7 @@ SKYPILOT_WHEEL_INSTALLATION_COMMANDS = (
     'fi;'
     # Install skypilot from wheel
     f'{SKY_UV_PIP_CMD} install "skypilot[{{cloud}},remote]${{SKYPILOT_VERSION}}" && '
-    'echo "${{SKYPILOT_VERSION}}" > ~/.sky/wheels/current_sky_version || '
+    'echo "{sky_wheel_hash}" > ~/.sky/wheels/current_sky_wheel_hash || '
     'exit 1; }; ')
 
 # Install ray and skypilot on the remote cluster if they are not already
