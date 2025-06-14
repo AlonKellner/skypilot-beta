@@ -374,7 +374,7 @@ available_node_types:
               value: {{k8s_fusermount_shared_dir}}
             {% endif %}
             - name: SKYPILOT_VERSION
-              value: {{skypilot_version}}
+              value: '{{skypilot_version}}'
           # Do not change this command - it keeps the pod alive until it is
           # explicitly killed.
           command: ["/bin/bash", "-c", "--"]
