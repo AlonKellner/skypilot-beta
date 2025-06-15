@@ -347,8 +347,12 @@ def launch(cluster_name: str, node_type: str, instance_type: str, region: str,
     }
 
     if preemptible is None or not preemptible:
+        logger.debug(
+            f'Creating a regular RunPod for {name} with GPU type {gpu_type}.')
         new_instance = runpod.runpod.create_pod(**params)
     else:
+        logger.debug(
+            f'Creating a spot RunPod for {name} with GPU type {gpu_type}.')
         new_instance = runpod_commands.create_spot_pod(
             bid_per_gpu=bid_per_gpu,
             **params,
