@@ -123,8 +123,8 @@ def create_spot_pod(
     logger.debug(f"Full spot mutation: \n{mutation}")
     try:
         response = runpod.runpod.api.graphql.run_graphql_query(mutation)
-    except runpod.error.QueryError as e:
-        raise runpod.error.QueryError(
+    except runpod.runpod.error.QueryError as e:
+        raise runpod.runpod.error.QueryError(
             f'Failed to create spot pod with mutation: \n{mutation}\n'
         ) from e
 
