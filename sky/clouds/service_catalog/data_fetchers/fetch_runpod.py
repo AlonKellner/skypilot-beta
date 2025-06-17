@@ -239,9 +239,7 @@ def get_partial_runpod_catalog(is_secure: bool) -> pd.DataFrame:
 def get_runpod_catalog() -> pd.DataFrame:
     secure_prices = get_partial_runpod_catalog(is_secure=True)
     secure_prices["InstanceType"] = secure_prices["InstanceType"] + "_SECURE"
-    community_prices = get_partial_runpod_catalog(is_secure=False)
-    community_prices["InstanceType"] = community_prices["InstanceType"] + "_COMMUNITY"
-    return pd.concat([secure_prices, community_prices], axis=0).reset_index(drop=True)
+    return secure_prices
 
 
 def update_runpod_catalog(catalog_path: str):
