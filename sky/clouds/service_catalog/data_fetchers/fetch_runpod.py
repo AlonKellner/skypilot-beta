@@ -149,9 +149,9 @@ query {{
     )
     gpu_df["gpu_id"] = gpu_df["id"]
 
-    df = df.join(gpu_df.set_index("gpu_id"), on="gpu_id", rsuffix=".gpu")
+    merged_df = pd.merge(df, gpu_df, on="gpu_id")
 
-    return df
+    return merged_df
 
 
 def get_partial_runpod_catalog(is_secure: bool) -> pd.DataFrame:
