@@ -21,7 +21,6 @@ from typing import List, Optional
 from sky import sky_logging
 from sky.adaptors import runpod
 from sky.provision.runpod.api.pods import generate_spot_pod_deployment_mutation
-import runpod as orig_runpod
 
 
 logger = sky_logging.init_logger(__name__)
@@ -124,8 +123,8 @@ def create_spot_pod(
     logger.debug(f"Full spot mutation: \n{mutation}")
     try:
         response = runpod.runpod.api.graphql.run_graphql_query(mutation)
-    except orig_runpod.error.QueryError as e:
-        raise orig_runpod.error.QueryError(
+    except runpod.error.QueryError as e:
+        raise runpod.error.QueryError(
             f'Failed to create spot pod with mutation: \n{mutation}\n'
         ) from e
 
