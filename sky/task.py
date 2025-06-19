@@ -472,6 +472,13 @@ class Task:
             config['envs'] = new_envs
 
         for k, v in config.get('envs', {}).items():
+            os_v = os.getenv(k)
+            if (v is None) and (os_v is not None):
+                # If the env var is None in the task YAML, but set in the
+                # environment, we use the environment value.
+                config['envs'][k] = os_v
+
+        for k, v in config.get('envs', {}).items():
             if v is None:
                 with ux_utils.print_exception_no_traceback():
                     raise ValueError(
